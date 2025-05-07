@@ -1,0 +1,164 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+
+## 🧾 PRD Core: Page Breakdown & Improvements
+---
+
+| Layer              | Technology                              | Purpose                                                                                    |
+| ------------------ | --------------------------------------- | ------------------------------------------------------------------------------------------ |
+| **Frontend**       | **Next.js**                             | React-based framework with file-based routing and server components                        |
+|                    | **Tailwind CSS**                        | Utility-first CSS framework for styling                                                    |
+|                    | **shadcn/ui**                           | Prebuilt accessible UI components using Radix + Tailwind (e.g., Dialog, Tabs, Forms, Card) |
+| **Backend**        | **Next.js API Routes**                  | Lightweight backend logic (e.g., GPT scoring, DB access)                                   |
+| **Auth**           | **Supabase Auth**                       | Google OAuth-based user authentication                                                     |
+| **Database**       | **Supabase (PostgreSQL)**               | Stores users, responses, scores, test data                                                 |
+| **Storage**        | **Supabase Storage**                    | (Optional) Stores audio recordings if you save them                                        |
+| **Speech-to-Text** | **OpenAI Whisper API** OR **Deepgram**  | Converts voice recordings into text for scoring                                            |
+| **AI Feedback**    | **OpenAI GPT-4 API**                    | Generates band score prediction, feedback, model answers                                   |
+| **Hosting**        | **Vercel**                              | Frontend & API hosting with serverless backend functions                                   |
+| **UI Icons**       | **Lucide-react** (built-in with shadcn) | Clean, customizable icons used in buttons and forms                                        |
+
+
+### 1. **Landing Page**
+
+> 🎯 Goal: Convert visitors → users
+
+**Must have:**
+
+* Hero section: *"Practice IELTS Speaking. AI Feedback in Seconds."*
+* CTA: "Try Free Test" / "Sign Up"
+* How it works: 3-steps illustration (Login → Practice → Get Band Score)
+* Testimonials / credibility (quotes from beta testers or mock quotes)
+* FAQ (important for SEO & user confidence)
+
+**Optional improvements:**
+
+* "Live speaking score trends" (fake chart to build FOMO 😏)
+* Short explainer video (\~30s)
+
+---
+
+### 2. **Sign In / Sign Up Pages**
+
+> 🎯 Goal: Frictionless entry into the app
+
+**Should support:**
+
+* Google OAuth (via Supabase)
+* Email login (optional for now)
+* Redirect to last attempted test if already in-progress
+
+**Optional improvements:**
+
+* Guest mode with limited access → prompt to register to save progress
+* Success animation after login/signup
+
+---
+
+### 3. **Tests Page (Cambridge List)**
+
+> 🎯 Goal: Let users pick any official test scenario quickly
+
+**Must include:**
+
+* List or grid of tests: "Cambridge 17 – Test 1", "Cambridge 17 – Test 2", etc.
+* Filter by Cambridge book number
+* Test status: "Not started", "In Progress", "Completed"
+* Difficulty level indicator (for future adaptive learning)
+
+**Optional UX polish:**
+
+* Progress bar next to each test (automatically calculated)
+* Tags for Part 2 topics to help users find specific themes
+* Save for later option (like bookmarking)
+
+---
+
+### 4. **Test-Taking Page**
+
+> 🎯 Goal: Simulate IELTS Speaking with AI scoring
+
+**Must include:**
+
+* Timer based on standardized IELTS part durations:
+  * Part 1: 4-5 minutes (general questions)
+  * Part 2: 2 minutes speaking + 1 minute preparation (cue card)
+  * Part 3: 4-5 minutes (discussion questions)
+* Question display with part instructions
+* Audio recorder (record, stop, re-record)
+* Submit → AI processes → score + feedback shown
+* Show sample Band 9 answer after submission
+
+**Optional improvements:**
+
+* "Mock Interview Mode" — GPT-powered bot asks questions and reacts
+* Fluency tracker: live word count or speech speed display
+* Show transcript + AI feedback by category:
+
+  * Fluency & Coherence
+  * Lexical Resource
+  * Grammar Range & Accuracy
+  * Pronunciation
+
+---
+
+### 5. **User Dashboard**
+
+> 🎯 Goal: Display progress and performance
+
+**Must include:**
+
+* Overall average band score (automatically calculated)
+* Tests completed vs. total available
+* Recent test activity
+* Strengths and weaknesses based on feedback categories
+* Recommended focus areas
+
+---
+
+## 🚀 Additional Pages to Add Later (Post-MVP)
+
+| Page                          | Purpose                                                                      |
+| ----- | ---- |
+| 🧠 **Feedback History**       | Let users revisit old submissions, listen to their recordings, re-score them |
+| 🌍 **Leaderboard (Gamified)** | Show global ranking by fluency, streak, or # of tests                        |
+| 🔔 **Notifications / Tips**   | Weekly reminders, test-taking advice, challenge of the day                   |
+| 📊 **Analytics & Reports**    | Detailed progression charts and performance breakdown                        |
+
+---
+
+## 🔐 Backend Notes (Updated)
+
+* Optimized Supabase DB schema:
+  * `cambridge_tests`: Stores test metadata with standardized IELTS part information
+  * `test_questions`: Questions with part numbers, types (standard/cue_card), and topics
+  * `user_responses`: Records audio, transcripts, and status
+  * `feedback`: Detailed scoring and improvement suggestions
+  * `user_progress`: Automatically tracks completion and calculates band scores
+  
+* Key technical features:
+  * Automatic band score calculation via database triggers
+  * Pre-built views (`complete_tests`, `user_progress_detailed`) for frontend queries
+  * Row-level security for user data privacy
+  * Optimized for the standardized IELTS speaking test structure
+
+* Technologies:
+  * Recordings stored in Supabase Storage
+  * OpenAI GPT-4 or Claude for scoring
+  * Whisper or Deepgram for speech-to-text
+  * TypeScript and Zod for type safety
+
+---
+
+## 📋 Implementation Priorities
+
+1. User authentication with Supabase Auth
+2. Test listing and filtering interface
+3. Audio recording and storage
+4. IELTS speaking test simulation flow
+5. AI-powered scoring and feedback system
+6. Progress tracking and analytics
