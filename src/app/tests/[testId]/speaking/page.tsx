@@ -131,7 +131,7 @@ export default function SpeakingTestPage() {
   
   // New state for holistic approach
   const [isMuted, setIsMuted] = useState(false)
-  const [hasUserInitiatedTest, setHasUserInitiatedTest] = useState(false)
+  const [userAction, setUserAction] = useState<'idle' | 'wantsToRecord' | 'wantsToStop' | 'wantsToSkip'>('idle');
   const [isTestCompleted, setIsTestCompleted] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [activeTab, setActiveTab] = useState("part-1")
@@ -173,62 +173,81 @@ export default function SpeakingTestPage() {
     return duration;
   }, [partQuestions, currentQuestionIndex]);
 
+  // Renamed for clarity and to accept a question argument
+  const getSpeakingDurationForQuestion = useCallback((question: TestQuestion | null): number => {
+    if (!question || !question.part_number) {
+      console.warn("[getSpeakingDurationForQuestion] Current question or part_number not available. Defaulting to 40s.");
+      return 40; 
+    }
+    const partNum = question.part_number;
+    let duration = 40;
+    if (partNum === 1) duration = 20;
+    else if (partNum === 2) duration = 120;
+    else if (partNum === 3) duration = 40;
+    else console.warn(`[getSpeakingDurationForQuestion] Unknown part number: ${partNum}. Defaulting to 40s.`);
+    console.log(`[getSpeakingDurationForQuestion] Question ID: ${question.id}, Part: ${partNum}, Standardized Duration: ${duration}s`);
+    return duration;
+  }, []);
+
   const stopRecording = useCallback(() => {
     console.log("[stopRecording] Called. mediaRecorderRef.current:", mediaRecorderRef.current, "State:", mediaRecorderRef.current?.state, "Recording status:", recordingStatus, "isRecording:", isRecording);
-    
+    setUserAction('wantsToStop'); // Signal intent
+
     if (mediaRecorderRef.current && (mediaRecorderRef.current.state === 'recording' || mediaRecorderRef.current.state === 'paused')) {
       try {
         console.log("[stopRecording] Attempting to stop mediaRecorder. Current state:", mediaRecorderRef.current.state);
         mediaRecorderRef.current.stop(); // This will trigger the onstop event
         console.log("[stopRecording] mediaRecorder.stop() called.");
+        // State updates (setIsRecording, setRecordingStatus) will be handled by onstop
       } catch (err) {
         console.error("[stopRecording] Error stopping recorder:", err);
         // Fallback state update if stop() call fails for some reason
         setIsRecording(false);
         setRecordingStatus('stopped');
+        setTimer(null);
       }
     } else {
       console.warn("[stopRecording] No active mediaRecorder to stop or recorder not in a stoppable state. Current state:", mediaRecorderRef.current?.state);
-      // If no recorder or not recording, ensure states are correctly set
-      if (recordingStatus !== 'stopped' && recordingStatus !== 'idle' && recordingStatus !== 'error') {
+      // If no recorder or not recording, ensure states are correctly set, unless an error occurred previously
+      if (recordingStatus !== 'error') {
         setIsRecording(false);
         setRecordingStatus('stopped');
-        // If timer was running, ensure it's cleared
         setTimer(null); 
       }
     }
-    // Explicitly set timer to null here as a safeguard, it should be managed by the timer effect or onstop too.
-    // setTimer(null); // Let's rely on the timer effect and onstop to handle this.
-  }, [recordingStatus, isRecording]);
+  }, [recordingStatus, isRecording]); // Removed setUserAction from deps to avoid loop if called from effect
 
-  const startRecording = useCallback(async () => {
-    console.log(`[startRecording] Attempting to start. Current status: ${recordingStatus}`);
-    if (recordingStatus === 'recording') {
-      console.warn("[startRecording] Already recording, exiting.");
+  // Renamed to avoid confusion, and added isRecording, userAction to deps carefully
+  // Now accepts questionToRecord as an argument
+  const startRecordingInternal = useCallback(async (questionToRecord: TestQuestion | null) => { 
+    console.log(`[startRecordingInternal] Attempting to start. Current status: ${recordingStatus}, isRecording: ${isRecording}`);
+    
+    if (!questionToRecord) {
+        console.error("[startRecordingInternal] No questionToRecord provided. Aborting.");
+        setUserAction('idle');
+        return;
+    }
+    console.log(`[startRecordingInternal] questionToRecord ID: ${questionToRecord.id}`);
+
+    if (isRecording || recordingStatus === 'recording') {
+      console.warn("[startRecordingInternal] Already recording or in process, exiting.");
       return;
     }
 
-    // Reset state for new recording
     setError(null);
     setAudioURL(null);
     audioChunksRef.current = [];
-    console.log("[startRecording] State reset for new recording.");
+    console.log("[startRecordingInternal] State reset for new recording.");
 
     try {
-      console.log("[startRecording] Checking existing MediaRecorder instance...");
-      // Stop any existing streams first to ensure clean state
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-        console.log("[startRecording] Found active recorder, stopping it first.");
-        mediaRecorderRef.current.stop();
-      }
-      
-      // Release any existing tracks from a previous stream
+      console.log("[startRecordingInternal] Checking existing MediaRecorder instance...");
       if (mediaRecorderRef.current && mediaRecorderRef.current.stream) {
-        console.log("[startRecording] Releasing tracks from previous stream.");
+        console.log("[startRecordingInternal] Releasing tracks from previous stream.");
         mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+        mediaRecorderRef.current = null; // Clear the ref
       }
       
-      console.log("[startRecording] Requesting user media (microphone).");
+      console.log("[startRecordingInternal] Requesting user media (microphone).");
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
           echoCancellation: true,
@@ -236,33 +255,36 @@ export default function SpeakingTestPage() {
           autoGainControl: true
         } 
       });
-      console.log("[startRecording] Microphone access granted.");
+      console.log("[startRecordingInternal] Microphone access granted.");
       
       if (isMuted && stream.getAudioTracks().length > 0) {
         stream.getAudioTracks()[0].enabled = false;
-        console.log("[startRecording] Microphone is muted by user setting.");
+        console.log("[startRecordingInternal] Microphone is muted by user setting.");
       }
       
-      // Use best supported MIME type
-      let mimeType = 'audio/webm';
+      let mimeType = 'audio/webm;codecs=opus';
       if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
         mimeType = 'audio/webm;codecs=opus';
       } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
         mimeType = 'audio/mp4';
       }
-      console.log(`[startRecording] Using MIME type: ${mimeType}`);
+      console.log(`[startRecordingInternal] Using MIME type: ${mimeType}`);
       
-      // Create MediaRecorder with reliable settings
-      const recorder = new MediaRecorder(stream, {
-        mimeType,
-        audioBitsPerSecond: 128000
-      });
-      console.log("[startRecording] MediaRecorder instance created.");
-      
-      // Store reference before setting up events
+      const recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 128000 });
+      console.log("[startRecordingInternal] MediaRecorder instance created.");
       mediaRecorderRef.current = recorder;
       
-      // Collect audio data
+      recorder.onstart = () => {
+        console.log("[onstart] MediaRecorder started. State:", mediaRecorderRef.current?.state);
+        setIsRecording(true); // Set true immediately on start
+        setRecordingStatus('recording');
+        
+        // Use questionToRecord to get duration
+        const duration = getSpeakingDurationForQuestion(questionToRecord);
+        console.log(`[onstart] Setting speaking timer for ${duration} seconds (for question ${questionToRecord.id}).`);
+        setTimer(duration); 
+      };
+
       recorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) {
           audioChunksRef.current.push(event.data);
@@ -272,7 +294,6 @@ export default function SpeakingTestPage() {
         }
       };
       
-      // Handle recording stop with better error handling
       recorder.onstop = () => {
         console.log("[onstop] Recording stopped. Processing audio. Chunks recorded:", audioChunksRef.current.length);
         
@@ -310,24 +331,17 @@ export default function SpeakingTestPage() {
           setError("Failed to process recording. Please try again.");
         }
         
-        // Always update state regardless of success
         console.log("[onstop] Updating recording status to 'stopped'.");
+        setIsRecording(false); // Set false on stop
         setRecordingStatus('stopped');
-        setIsRecording(false);
         setTimer(null); // Explicitly stop timer here
         
-        // Release microphone
         stream.getTracks().forEach(track => {
           console.log(`[onstop] Stopping media track: ${track.kind}`);
           track.stop();
         });
         console.log("[onstop] All media tracks stopped.");
-      };
-
-      recorder.onstart = () => {
-        console.log("[onstart] MediaRecorder started. State:", mediaRecorderRef.current?.state);
-        setIsRecording(true);
-        setRecordingStatus('recording');
+        setUserAction('idle'); // Reset user action after stop processing
       };
 
       recorder.onerror = (event) => {
@@ -338,30 +352,15 @@ export default function SpeakingTestPage() {
         setRecordingStatus('error');
         setIsRecording(false);
         setTimer(null);
-         // Clean up stream tracks on error as well
         stream.getTracks().forEach(track => track.stop());
+        setUserAction('idle'); 
       };
       
-      // Start recording with regular time slices
-      console.log("[startRecording] Calling recorder.start(500). Current state:", recorder.state);
-      recorder.start(500); // Request data every 500ms
-      
-      // Set up the timer for speaking AFTER recorder.start() and onstart sets states
-      if (!currentQuestion) { // Use the memoized currentQuestion
-        console.error("[startRecording] Cannot start timer: current question (memoized) is not available AFTER starting recorder.");
-        // Attempt to stop recording to prevent orphaned state
-        if(mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording'){
-            mediaRecorderRef.current.stop();
-        }
-        throw new Error("Cannot start timer: current question is not available.");
-      }
-      
-      const duration = getSpeakingDurationForCurrentQuestion(); // Use the new reliable function
-      console.log(`[startRecording] Setting speaking timer for ${duration} seconds.`);
-      setTimer(duration); // This will trigger the timer useEffect
+      console.log("[startRecordingInternal] Calling recorder.start(500). Current state:", recorder.state);
+      recorder.start(500); 
       
     } catch (error: any) {
-      console.error('[startRecording] Outer catch block error:', error);
+      console.error('[startRecordingInternal] Outer catch block error:', error);
       
       let errorMessage = 'Failed to start recording.';
       
@@ -377,10 +376,36 @@ export default function SpeakingTestPage() {
       
       setError(errorMessage);
       setRecordingStatus('error');
-      setIsRecording(false);
+      setIsRecording(false); // Ensure isRecording is false on error
+      setUserAction('idle');
     }
-  }, [currentQuestionIndex, getSpeakingDurationForCurrentQuestion, isMuted, partQuestions, recordingStatus]);
-  
+  }, [getSpeakingDurationForQuestion, isMuted, recordingStatus, isRecording, userAction, setUserAction]);
+
+  // Effect to handle user's intent to record
+  useEffect(() => {
+    // Use the memoized currentQuestion from the outer scope for the condition
+    const questionForAction = partQuestions[currentQuestionIndex]; 
+
+    if (userAction === 'wantsToRecord' && questionForAction && !isRecording && recordingStatus !== 'recording') {
+      console.log("[Effect_HandleUserAction] User wants to record for question:", questionForAction.id);
+      
+      if (questionForAction.part_number === 2 && testInfo?.part2_preparation_seconds &&
+          questionForAction.sequence_number === questions.filter(q => q.part_number === 2)[0]?.sequence_number && 
+          !userResponses[questionForAction.id]?.audioBlob) {
+          
+          console.log(`[Effect_HandleUserAction] Starting Part 2 preparation time for ${testInfo.part2_preparation_seconds} seconds.`);
+          setIsPreparationTime(true);
+          setPrepTimer(testInfo.part2_preparation_seconds);
+      } else {
+        setIsPreparationTime(false); 
+        startRecordingInternal(questionForAction); // Pass the fresh currentQuestion
+      }
+    } else if (userAction === 'wantsToRecord' && (isRecording || recordingStatus === 'recording')) {
+        console.log("[Effect_HandleUserAction] User wants to record, but already recording. No action.");
+    }
+    // currentQuestion is now a dependency
+  }, [userAction, partQuestions, currentQuestionIndex, isRecording, recordingStatus, startRecordingInternal, testInfo, questions, userResponses, setIsPreparationTime, setPrepTimer]);
+
   // Add this function to check browser compatibility
   const checkMicrophonePermission = useCallback(async () => {
     try {
@@ -596,10 +621,16 @@ export default function SpeakingTestPage() {
     }
   }, [currentPartIndex, questions, stopRecording, userResponses])
   
-  // Timer effect for speaking - Fix timer issues by ensuring it's only cleared on completion
+  // Timer effect for speaking
   useEffect(() => {
-    if (timer === null || !isRecording) { // Ensure timer runs only when actively recording AND timer is set
-      console.log(`[TimerEffect] Timer not starting or stopping. Timer: ${timer}, isRecording: ${isRecording}, recordingStatus: ${recordingStatus}`);
+    // Only run if timer has a value, we are flagged as recording, and status is 'recording'
+    if (timer === null || !isRecording || recordingStatus !== 'recording') {
+      console.log(`[TimerEffect] Conditions not met for timer countdown. Timer: ${timer}, isRecording: ${isRecording}, recordingStatus: ${recordingStatus}`);
+      // If timer is 0 but we are still 'recording', it means stopRecording wasn't called by timer expiry, so call it.
+      if (timer === 0 && isRecording && recordingStatus === 'recording') {
+          console.warn("[TimerEffect] Timer is 0 but still recording. Forcing stop.");
+          stopRecording();
+      }
       return;
     }
     
@@ -610,46 +641,84 @@ export default function SpeakingTestPage() {
         if (prevTimer === null) {
           console.log("[TimerEffect] prevTimer is null, clearing interval.");
           clearInterval(interval);
-          return 0; // Or null, depending on desired reset state
+          return null;
         }
         
-        if (prevTimer <= 1) { // Use <= 1 to ensure it hits 0 and then stops.
+        if (prevTimer <= 1) {
           console.log("[TimerEffect] Timer reached zero or less, stopping recording and clearing interval.");
           clearInterval(interval);
-          // Check isRecording again before calling stopRecording, as it might have been stopped by other means
-          if (isRecording && recordingStatus === 'recording') { 
-            console.log("[TimerEffect] Calling stopRecording() as timer expired.");
-            stopRecording();
+          // stopRecording() will be called which handles setIsRecording(false) and setRecordingStatus('stopped') via onstop
+          // We must ensure that stopRecording is robust and handles all state changes
+          if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') { // Double check if still recording
+               console.log("[TimerEffect] Calling mediaRecorderRef.current.stop() as timer expired.");
+               mediaRecorderRef.current.stop(); // Directly stop the recorder
+          } else {
+              console.warn("[TimerEffect] Timer expired, but MediaRecorder not in 'recording' state or not available. State:", mediaRecorderRef.current?.state);
+              // Ensure states are reset if recorder was already stopped by other means
+              setIsRecording(false);
+              setRecordingStatus('stopped');
           }
-          return 0; // Reset timer to 0
+          return 0; 
         }
-        
-        // console.log(`[TimerEffect] Decrementing timer: ${prevTimer - 1}`);
         return prevTimer - 1;
       });
     }, 1000);
     
-    // Cleanup function
     return () => {
-      console.log("[TimerEffect] Cleanup: Clearing interval.");
+      console.log("[TimerEffect] Cleanup: Clearing interval for timer with initial value:", timer);
       clearInterval(interval);
     };
-  }, [timer, isRecording, recordingStatus, stopRecording]); // Added recordingStatus to dependencies
+  }, [timer, isRecording, recordingStatus, stopRecording]); // stopRecording might not be needed if mediaRecorder.stop() is called directly
 
-  // Prevent excess stopRecording calls by cleaning up the previous useEffect
-  // This separates timer management from cleanup actions
+  // useEffect for preparation timer (Part 2)
   useEffect(() => {
-    // Setup cleanup function for component unmount only
+    if (prepTimer === null || !isPreparationTime) return;
+
+    const activeQuestionForPrep = partQuestions[currentQuestionIndex]; 
+
+    const interval = setInterval(() => {
+      setPrepTimer(prevTimer => {
+        if (prevTimer === null || prevTimer <= 0) {
+          clearInterval(interval);
+          setIsPreparationTime(false);
+          console.log("[PrepTimerEffect] Prep time finished. Attempting to start actual recording.");
+          
+          if (activeQuestionForPrep && recordingStatus !== 'recording' && !isRecording) {
+               console.log("[PrepTimerEffect] Conditions met, calling startRecordingInternal for question:", activeQuestionForPrep.id);
+               startRecordingInternal(activeQuestionForPrep); // Pass the question
+          } else {
+              console.warn("[PrepTimerEffect] Conditions not met to start recording after prep time. Question:", activeQuestionForPrep?.id, "Status:", recordingStatus, "isRecording:", isRecording);
+              setUserAction('idle'); // Reset if we can't start
+          }
+          return 0;
+        }
+        return prevTimer - 1;
+      });
+    }, 1000);
+
     return () => {
-      console.log("[UnmountEffect] Component unmounting. Current recordingStatus:", recordingStatus, "isRecording:", isRecording);
-      // Only stop recording on unmount if actually recording
-      if (isRecording && mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-        console.log("[UnmountEffect] Cleaning up recording: stopping MediaRecorder.");
+      console.log("[PrepTimerEffect] Cleanup: Clearing interval for prepTimer.");
+      clearInterval(interval);
+    };
+  }, [prepTimer, isPreparationTime, startRecordingInternal, recordingStatus, isRecording, partQuestions, currentQuestionIndex, setUserAction, setIsPreparationTime]);
+
+  // UnmountEffect: Simplified
+  useEffect(() => {
+    return () => {
+      console.log("[UnmountEffect] Component unmounting. mediaRecorder state:", mediaRecorderRef.current?.state);
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+        console.log("[UnmountEffect] Cleaning up: stopping MediaRecorder.");
+        mediaRecorderRef.current.onstop = null; // Prevent onstop from running during unmount cleanup if it causes issues
         mediaRecorderRef.current.stop();
+        // Release stream tracks
+        if (mediaRecorderRef.current.stream) {
+          mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+        }
+        mediaRecorderRef.current = null;
       }
     };
-  }, [isRecording]); // Dependency only on isRecording to reflect if it was active
-  
+  }, []); // Empty dependency array means this runs only on mount and unmount
+
   // Load user's existing responses when changing questions
   useEffect(() => {
     if (!currentQuestion) return;
@@ -845,33 +914,25 @@ export default function SpeakingTestPage() {
     }
   }, [currentPartIndex, currentQuestionIndex, isRecording, partQuestions.length, recordingStatus, stopRecording, setIsSubmitDialogOpen]);
   
-  // Start or restart test
+  // Start or restart test (this function is called by the UI button)
   const startTest = useCallback(async () => {
+    console.log("[startTest] User clicked start/record button.");
     // Check browser compatibility first
     const browserName = getBrowserInfo();
-    console.log(`Using browser: ${browserName}`);
+    console.log(`[startTest] Using browser: ${browserName}`);
     
     // Check if microphone permission is granted
     const permissionGranted = await checkMicrophonePermission();
     if (!permissionGranted) {
-      return; // Stop if permission denied
+      console.error("[startTest] Microphone permission not granted. Cannot start.");
+      return; 
     }
     
-    setHasUserInitiatedTest(true);
-    const currentQuestion = partQuestions[currentQuestionIndex];
-    
-    if (currentQuestion?.part_number === 2 && testInfo?.part2_preparation_seconds && 
-        currentQuestion.sequence_number === questions.filter(q => q.part_number === 2)[0].sequence_number) {
-      // Start preparation time for Part 2's first question
-      setIsPreparationTime(true);
-      setPrepTimer(testInfo.part2_preparation_seconds);
-      console.log(`Starting preparation time for ${testInfo.part2_preparation_seconds} seconds`);
-    } else {
-      // Start recording directly for other parts
-      console.log("Starting recording directly");
-      startRecording();
-    }
-  }, [checkMicrophonePermission, currentQuestionIndex, getBrowserInfo, partQuestions, questions, startRecording, testInfo]);
+    console.log("[startTest] Setting userAction to 'wantsToRecord'.");
+    setUserAction('wantsToRecord'); 
+    // The actual recording will be triggered by the useEffect watching userAction
+
+  }, [checkMicrophonePermission, getBrowserInfo]);
   
   // Toggle microphone mute status
   const toggleMute = () => {
@@ -916,36 +977,16 @@ export default function SpeakingTestPage() {
     );
   };
 
-  // Preparation timer effect for Part 2
-  useEffect(() => {
-    if (prepTimer === null || !isPreparationTime) return;
-    
-    const interval = setInterval(() => {
-      setPrepTimer(prevTimer => {
-        if (prevTimer === null || prevTimer <= 0) {
-          clearInterval(interval);
-          setIsPreparationTime(false);
-          // Start recording automatically after prep time
-          startRecording();
-          return 0;
-        }
-        return prevTimer - 1;
-      });
-    }, 1000);
-    
-    return () => clearInterval(interval);
-  }, [prepTimer, isPreparationTime, startRecording]);
-
   // Start the overall timer when the test begins
   useEffect(() => {
-    if (hasUserInitiatedTest) {
+    if (userAction === 'wantsToRecord') {
       const interval = setInterval(() => {
         setOverallTimer(prev => prev + 1);
       }, 1000);
       
       return () => clearInterval(interval);
     }
-  }, [hasUserInitiatedTest]);
+  }, [userAction]);
 
   // Set question-specific timer when starting a new question
   useEffect(() => {
