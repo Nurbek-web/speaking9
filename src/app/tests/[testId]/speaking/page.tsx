@@ -230,15 +230,6 @@ export default function SpeakingTestPage() {
       // Store reference before setting up events
       mediaRecorderRef.current = recorder;
       
-      // Set minimum recording time - increased for reliability
-      const minRecordingTime = 5000; // 5 seconds minimum
-      let canStop = false;
-      
-      setTimeout(() => {
-        canStop = true;
-        console.log("Minimum recording time reached, can stop now");
-      }, minRecordingTime);
-      
       // Collect audio data
       recorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) {
@@ -291,31 +282,6 @@ export default function SpeakingTestPage() {
           console.log(`Stopping track: ${track.kind}`);
           track.stop();
         });
-      };
-      
-      // Create a safer stop method that logs attempts
-      const originalStop = recorder.stop;
-      recorder.stop = function() {
-        console.log(`Stop requested, can stop: ${canStop}`);
-        
-        if (!canStop) {
-          console.log("Preventing early stop, waiting for minimum duration");
-          setTimeout(() => {
-            console.log("Executing delayed stop after minimum time");
-            if (this.state === 'recording') {
-              try {
-                console.log("Calling original stop method");
-                originalStop.apply(this);
-              } catch (e) {
-                console.error("Error in delayed stop:", e);
-              }
-            }
-          }, minRecordingTime + 500);
-          return;
-        }
-        
-        console.log("Executing normal stop");
-        return originalStop.apply(this);
       };
       
       // Start recording with regular time slices
@@ -575,17 +541,25 @@ export default function SpeakingTestPage() {
   useEffect(() => {
     if (timer === null || recordingStatus !== 'recording') return;
     
+    console.log(`Setting up timer effect with ${timer} seconds`);
+    
     // Show clear countdown logic
     const interval = setInterval(() => {
       setTimer(prevTimer => {
-        if (prevTimer === null || prevTimer <= 0) {
+        if (prevTimer === null) {
           clearInterval(interval);
+          return 0;
+        }
+        
+        if (prevTimer <= 1) {
+          clearInterval(interval);
+          console.log("Timer reached zero, stopping recording");
           if (isRecording) {
-            console.log("Timer completed, stopping recording");
             stopRecording();
           }
           return 0;
         }
+        
         return prevTimer - 1;
       });
     }, 1000);
@@ -1018,6 +992,57 @@ export default function SpeakingTestPage() {
       return formatTime(totalDuration);
     };
     
+    // Enhanced countdown display
+    const CountdownDisplay = () => {
+      const timeRemaining = isPreparationTime ? prepTimer || 0 : timer || 0;
+      const timeTotal = isPreparationTime ? totalPrepDuration : totalDuration;
+      const percentage = timeTotal > 0 ? (timeRemaining / timeTotal) * 100 : 0;
+      
+      return (
+        <div className="fixed top-20 right-4 flex flex-col items-center bg-white shadow-lg rounded-lg p-3 z-50">
+          <div className="text-center mb-1">
+            <span className={`text-3xl font-bold ${
+              timeRemaining < 10 ? 'text-red-600 animate-pulse' : 
+              timeRemaining < 20 ? 'text-orange-500' : 'text-gray-700'
+            }`}>
+              {formatTime(timeRemaining)}
+            </span>
+          </div>
+          <div className="w-16 h-16 relative">
+            <svg className="w-full h-full" viewBox="0 0 100 100">
+              <circle 
+                className="text-gray-200" 
+                strokeWidth="8" 
+                stroke="currentColor" 
+                fill="transparent" 
+                r="40" 
+                cx="50" 
+                cy="50" 
+              />
+              <circle 
+                className={`${
+                  timeRemaining < 10 ? 'text-red-500' : 
+                  timeRemaining < 20 ? 'text-orange-400' : 'text-indigo-600'
+                }`}
+                strokeWidth="8" 
+                strokeDasharray={`${2 * Math.PI * 40}`}
+                strokeDashoffset={`${2 * Math.PI * 40 * (1 - percentage / 100)}`}
+                strokeLinecap="round" 
+                stroke="currentColor" 
+                fill="transparent" 
+                r="40" 
+                cx="50" 
+                cy="50" 
+              />
+            </svg>
+            <span className="absolute inset-0 flex items-center justify-center text-xs">
+              {isPreparationTime ? 'PREP' : 'TALK'}
+            </span>
+          </div>
+        </div>
+      );
+    };
+    
     return (
       <div className="flex flex-col min-h-screen bg-gray-50">
         {/* Status bar with part/question progress */}
@@ -1116,6 +1141,9 @@ export default function SpeakingTestPage() {
 
         {/* Main content area */}
         <main className="flex-1 flex flex-col items-center justify-center p-4 md:p-6">
+          {/* Show prominent countdown timer when recording or in prep time */}
+          {(recordingStatus === 'recording' || isPreparationTime) && <CountdownDisplay />}
+          
           {error && (
             <Alert variant="destructive" className="mb-6 max-w-2xl w-full">
               <AlertCircle className="h-4 w-4" />
