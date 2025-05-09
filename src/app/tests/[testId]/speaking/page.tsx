@@ -148,15 +148,24 @@ export default function SpeakingTestPage() {
   const [questionStartTime, setQuestionStartTime] = useState<number>(0);
   const [questionDuration, setQuestionDuration] = useState<number>(40); // Default 40 seconds per question
   
-  // Timer effect
-  const getSpeakingDurationForCurrentPart = useCallback(() => {
-    if (!testInfo || !partQuestions[currentQuestionIndex]) return 0; // Default or error
-    const currentPartNum = partQuestions[currentQuestionIndex].part_number;
-    if (currentPartNum === 1) return testInfo.part1_duration_seconds || 0;
-    if (currentPartNum === 2) return testInfo.part2_duration_seconds || 0;
-    if (currentPartNum === 3) return testInfo.part3_duration_seconds || 0;
-    return 0;
-  }, [testInfo, partQuestions, currentQuestionIndex]);
+  // New callback to get speaking duration for the current question
+  const getSpeakingDurationForCurrentQuestion = useCallback(() => {
+    const currentQ = partQuestions[currentQuestionIndex];
+    if (!currentQ) {
+      console.warn("[getSpeakingDuration] Current question not available. Defaulting to 40s.");
+      return 40; // Default if no question
+    }
+
+    const duration = currentQ.speaking_time_seconds;
+    console.log(`[getSpeakingDuration] Question ID: ${currentQ.id}, Part: ${currentQ.part_number}, Specified speaking_time_seconds: ${duration}`);
+
+    if (typeof duration === 'number' && duration > 0) {
+      return duration;
+    }
+
+    console.warn(`[getSpeakingDuration] No valid speaking_time_seconds for question ${currentQ.id} (value: ${duration}). Defaulting to 40s.`);
+    return 40; // Default to 40 seconds if not specified or invalid on the question
+  }, [partQuestions, currentQuestionIndex]);
 
   const stopRecording = useCallback(() => {
     console.log("[stopRecording] Called. mediaRecorderRef.current:", mediaRecorderRef.current, "State:", mediaRecorderRef.current?.state, "Recording status:", recordingStatus, "isRecording:", isRecording);
@@ -332,13 +341,16 @@ export default function SpeakingTestPage() {
       recorder.start(500); // Request data every 500ms
       
       // Set up the timer for speaking AFTER recorder.start() and onstart sets states
-      const currentQ = partQuestions[currentQuestionIndex];
-      if (!currentQ) {
-        console.error("[startRecording] Cannot start timer: current question is not available AFTER starting recorder.");
+      if (!currentQuestion) { // Use the memoized currentQuestion
+        console.error("[startRecording] Cannot start timer: current question (memoized) is not available AFTER starting recorder.");
+        // Attempt to stop recording to prevent orphaned state
+        if(mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording'){
+            mediaRecorderRef.current.stop();
+        }
         throw new Error("Cannot start timer: current question is not available.");
       }
       
-      const duration = getSpeakingDurationForCurrentPart();
+      const duration = getSpeakingDurationForCurrentQuestion(); // Use the new reliable function
       console.log(`[startRecording] Setting speaking timer for ${duration} seconds.`);
       setTimer(duration); // This will trigger the timer useEffect
       
@@ -361,7 +373,7 @@ export default function SpeakingTestPage() {
       setRecordingStatus('error');
       setIsRecording(false);
     }
-  }, [currentQuestionIndex, getSpeakingDurationForCurrentPart, isMuted, partQuestions, recordingStatus]);
+  }, [currentQuestionIndex, getSpeakingDurationForCurrentQuestion, isMuted, partQuestions, recordingStatus]);
   
   // Add this function to check browser compatibility
   const checkMicrophonePermission = useCallback(async () => {
@@ -471,7 +483,7 @@ export default function SpeakingTestPage() {
         // Fetch questions for this test
         const { data: questionsDataFetched, error: questionsError } = await supabase
           .from('test_questions')
-          .select('id, part_number, sequence_number, question_text, question_type, topic')
+          .select('id, part_number, sequence_number, question_text, question_type, topic, speaking_time_seconds')
           .eq('cambridge_test_id', testId)
           .order('part_number')
           .order('sequence_number');
@@ -804,31 +816,28 @@ export default function SpeakingTestPage() {
   
   // Skip to next question or part without submitting for evaluation
   const handleNextQuestion = useCallback(() => {
-    console.log("Attempting to navigate to next question");
-    
+    console.log(`[handleNextQuestion] Attempting to navigate. From QIndex: ${currentQuestionIndex}, PartIndex: ${currentPartIndex}. Current status: ${recordingStatus}, isRecording: ${isRecording}`);
+
     // Stop recording if in progress
     if (isRecording || recordingStatus === 'recording') {
-      stopRecording();
+      console.log("[handleNextQuestion] Recording is active, calling stopRecording().");
+      stopRecording(); 
     }
-    
-    // Move to next question in the current part
+
     if (currentQuestionIndex < partQuestions.length - 1) {
-      console.log(`Moving from question ${currentQuestionIndex} to ${currentQuestionIndex + 1}`);
-      setCurrentQuestionIndex(currentQuestionIndex + 1);
-      setRecordingStatus('idle');
-      setAudioURL(null);
-    } 
-    // Move to next part
-    else if (currentPartIndex < 2) {
+      const newQuestionIndex = currentQuestionIndex + 1;
+      console.log(`[handleNextQuestion] Moving from question ${currentQuestionIndex} to ${newQuestionIndex} in part ${currentPartIndex + 1}. Total questions in part: ${partQuestions.length}`);
+      setCurrentQuestionIndex(newQuestionIndex);
+    }
+    else if (currentPartIndex < 2) { // Max part index is 2 (for Part 3)
       const newPartIndex = currentPartIndex + 1;
-      console.log(`Moving to part ${newPartIndex + 1}`);
-      setCurrentPartIndex(newPartIndex);
+      console.log(`[handleNextQuestion] Moving from part ${currentPartIndex + 1} to part ${newPartIndex + 1}.`);
+      setCurrentPartIndex(newPartIndex); // This will trigger partQuestions update via useEffect
     } else {
-      // If at the end of the test, show submit dialog
-      console.log("End of test reached");
+      console.log("[handleNextQuestion] End of test reached (already on last question of last part), showing submit dialog.");
       setIsSubmitDialogOpen(true);
     }
-  }, [currentPartIndex, currentQuestionIndex, isRecording, partQuestions.length, recordingStatus, stopRecording]);
+  }, [currentPartIndex, currentQuestionIndex, isRecording, partQuestions.length, recordingStatus, stopRecording, setIsSubmitDialogOpen]);
   
   // Start or restart test
   const startTest = useCallback(async () => {
@@ -935,12 +944,10 @@ export default function SpeakingTestPage() {
   // Set question-specific timer when starting a new question
   useEffect(() => {
     if (currentQuestion) {
-      // Set duration based on question type or part
       const newDuration = currentQuestion.speaking_time_seconds || 40; // Use default if not specified
+      console.log(`[MainTestUIEffect_QuestionDuration] Setting questionDuration for UI. Question: ${currentQuestion.id}, speaking_time_seconds: ${currentQuestion.speaking_time_seconds}, Effective UI duration: ${newDuration}`);
       setQuestionDuration(newDuration);
-      
-      // Reset the question start time counter
-      setQuestionStartTime(0);
+      setQuestionStartTime(0); // Reset time spent on this question for UI
     }
   }, [currentQuestion]);
 
