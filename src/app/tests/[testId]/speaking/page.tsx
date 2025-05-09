@@ -332,16 +332,16 @@ export default function SpeakingTestPage() {
         }
         
         console.log("[onstop] Updating recording status to 'stopped'.");
-        setIsRecording(false); // Set false on stop
+        setIsRecording(false);
         setRecordingStatus('stopped');
-        setTimer(null); // Explicitly stop timer here
+        setTimer(null);
         
         stream.getTracks().forEach(track => {
           console.log(`[onstop] Stopping media track: ${track.kind}`);
           track.stop();
         });
         console.log("[onstop] All media tracks stopped.");
-        setUserAction('idle'); // Reset user action after stop processing
+        setUserAction('idle');
       };
 
       recorder.onerror = (event) => {
@@ -626,10 +626,18 @@ export default function SpeakingTestPage() {
     // Only run if timer has a value, we are flagged as recording, and status is 'recording'
     if (timer === null || !isRecording || recordingStatus !== 'recording') {
       console.log(`[TimerEffect] Conditions not met for timer countdown. Timer: ${timer}, isRecording: ${isRecording}, recordingStatus: ${recordingStatus}`);
-      // If timer is 0 but we are still 'recording', it means stopRecording wasn't called by timer expiry, so call it.
+      // If timer is 0 but we are still 'recording', it might mean stop() was called but onstop hasn't updated state yet.
+      // Or if stopRecording wasn't called by timer expiry.
       if (timer === 0 && isRecording && recordingStatus === 'recording') {
-          console.warn("[TimerEffect] Timer is 0 but still recording. Forcing stop.");
-          stopRecording();
+          console.warn("[TimerEffect] Timer is 0 but state indicates still recording. Forcing state update and attempting stop again if needed.");
+          if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+              mediaRecorderRef.current.stop();
+          } else {
+              // If recorder is not in recording state, just update React state
+              setIsRecording(false);
+              setRecordingStatus('stopped');
+              // setUserAction('idle'); // onstop handles this
+          }
       }
       return;
     }
@@ -638,23 +646,26 @@ export default function SpeakingTestPage() {
     
     const interval = setInterval(() => {
       setTimer(prevTimer => {
-        if (prevTimer === null) {
-          console.log("[TimerEffect] prevTimer is null, clearing interval.");
+        if (prevTimer === null) { 
+          console.log("[TimerEffect] prevTimer is null inside interval, clearing interval.");
           clearInterval(interval);
-          return null;
+          return null; 
         }
         
         if (prevTimer <= 1) {
-          console.log("[TimerEffect] Timer reached zero or less, stopping recording and clearing interval.");
+          console.log("[TimerEffect] Timer reached zero or less. Clearing interval. Attempting to stop MediaRecorder.");
           clearInterval(interval);
-          // stopRecording() will be called which handles setIsRecording(false) and setRecordingStatus('stopped') via onstop
-          // We must ensure that stopRecording is robust and handles all state changes
-          if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') { // Double check if still recording
+          
+          if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
                console.log("[TimerEffect] Calling mediaRecorderRef.current.stop() as timer expired.");
-               mediaRecorderRef.current.stop(); // Directly stop the recorder
+               mediaRecorderRef.current.stop(); // This will trigger onstop
+               // Immediately update state to reflect that recording is stopping/stopped by timer.
+               // onstop will finalize other parts like audio processing and setUserAction('idle').
+               setIsRecording(false); 
+               setRecordingStatus('stopping'); // A new status to indicate timer-initiated stop in progress
           } else {
               console.warn("[TimerEffect] Timer expired, but MediaRecorder not in 'recording' state or not available. State:", mediaRecorderRef.current?.state);
-              // Ensure states are reset if recorder was already stopped by other means
+              // Ensure states are reset if recorder was already stopped or never started properly.
               setIsRecording(false);
               setRecordingStatus('stopped');
           }
@@ -665,10 +676,11 @@ export default function SpeakingTestPage() {
     }, 1000);
     
     return () => {
-      console.log("[TimerEffect] Cleanup: Clearing interval for timer with initial value:", timer);
+      console.log("[TimerEffect] Cleanup: Clearing interval for timer with initial value (at cleanup time):", timer);
       clearInterval(interval);
     };
-  }, [timer, isRecording, recordingStatus, stopRecording]); // stopRecording might not be needed if mediaRecorder.stop() is called directly
+    // Remove stopRecording from dependencies. The effect directly calls mediaRecorderRef.current.stop().
+  }, [timer, isRecording, recordingStatus, setIsRecording, setRecordingStatus]); 
 
   // useEffect for preparation timer (Part 2)
   useEffect(() => {
