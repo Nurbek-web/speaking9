@@ -151,20 +151,26 @@ export default function SpeakingTestPage() {
   // New callback to get speaking duration for the current question
   const getSpeakingDurationForCurrentQuestion = useCallback(() => {
     const currentQ = partQuestions[currentQuestionIndex];
-    if (!currentQ) {
-      console.warn("[getSpeakingDuration] Current question not available. Defaulting to 40s.");
-      return 40; // Default if no question
+    if (!currentQ || !currentQ.part_number) {
+      console.warn("[getSpeakingDuration] Current question or part_number not available. Defaulting to 40s.");
+      return 40; // Default if no question or part_number
     }
 
-    const duration = currentQ.speaking_time_seconds;
-    console.log(`[getSpeakingDuration] Question ID: ${currentQ.id}, Part: ${currentQ.part_number}, Specified speaking_time_seconds: ${duration}`);
+    const partNum = currentQ.part_number;
+    let duration = 40; // Default duration
 
-    if (typeof duration === 'number' && duration > 0) {
-      return duration;
+    if (partNum === 1) {
+      duration = 20; // Part 1: 20 seconds
+    } else if (partNum === 2) {
+      duration = 120; // Part 2: 120 seconds (2 minutes)
+    } else if (partNum === 3) {
+      duration = 40; // Part 3: 40 seconds
+    } else {
+      console.warn(`[getSpeakingDuration] Unknown part number: ${partNum}. Defaulting to 40s.`);
     }
 
-    console.warn(`[getSpeakingDuration] No valid speaking_time_seconds for question ${currentQ.id} (value: ${duration}). Defaulting to 40s.`);
-    return 40; // Default to 40 seconds if not specified or invalid on the question
+    console.log(`[getSpeakingDuration] Question ID: ${currentQ.id}, Part: ${partNum}, Standardized Duration: ${duration}s`);
+    return duration;
   }, [partQuestions, currentQuestionIndex]);
 
   const stopRecording = useCallback(() => {
@@ -483,7 +489,7 @@ export default function SpeakingTestPage() {
         // Fetch questions for this test
         const { data: questionsDataFetched, error: questionsError } = await supabase
           .from('test_questions')
-          .select('id, part_number, sequence_number, question_text, question_type, topic, speaking_time_seconds')
+          .select('id, part_number, sequence_number, question_text, question_type, topic')
           .eq('cambridge_test_id', testId)
           .order('part_number')
           .order('sequence_number');
@@ -944,8 +950,18 @@ export default function SpeakingTestPage() {
   // Set question-specific timer when starting a new question
   useEffect(() => {
     if (currentQuestion) {
-      const newDuration = currentQuestion.speaking_time_seconds || 40; // Use default if not specified
-      console.log(`[MainTestUIEffect_QuestionDuration] Setting questionDuration for UI. Question: ${currentQuestion.id}, speaking_time_seconds: ${currentQuestion.speaking_time_seconds}, Effective UI duration: ${newDuration}`);
+      // Determine duration based on part number, similar to getSpeakingDurationForCurrentQuestion
+      let newDuration = 40; // Default
+      const partNum = currentQuestion.part_number;
+
+      if (partNum === 1) {
+        newDuration = 20;
+      } else if (partNum === 2) {
+        newDuration = 120;
+      } else if (partNum === 3) {
+        newDuration = 40;
+      }
+      console.log(`[MainTestUIEffect_QuestionDuration] Setting questionDuration for UI. Question: ${currentQuestion.id}, Part: ${partNum}, Standardized UI duration: ${newDuration}`);
       setQuestionDuration(newDuration);
       setQuestionStartTime(0); // Reset time spent on this question for UI
     }
