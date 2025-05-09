@@ -630,118 +630,78 @@ export default function SpeakingTestPage() {
   
   // Timer effect for speaking
   useEffect(() => {
-    // Clear any existing interval when dependencies change before setting up a new one.
     if (timerIntervalIdRef.current) {
-      console.log("[TimerEffect_Setup] Clearing previous interval ID:", timerIntervalIdRef.current);
+      console.log("[TimerEffect_Setup] Clearing previous interval ID before new setup:", timerIntervalIdRef.current);
       clearInterval(timerIntervalIdRef.current);
       timerIntervalIdRef.current = null;
     }
 
-    if (timer === null || !isRecording || recordingStatus !== 'recording' || recordingEndTimeRef.current === null) {
-      console.log(`[TimerEffect] Conditions not met for timer countdown or recordingEndTimeRef not set. Timer: ${timer}, isRecording: ${isRecording}, recordingStatus: ${recordingStatus}, endTimeSet: ${!!recordingEndTimeRef.current}`);
-      if (timer === 0 && isRecording && recordingStatus === 'recording') {
-          console.warn("[TimerEffect] Safeguard: Timer is 0 but still recording. Forcing stop.");
-          if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-              mediaRecorderRef.current.stop();
-          } else {
+    if (isRecording && recordingStatus === 'recording' && recordingEndTimeRef.current !== null) {
+      console.log(`[TimerEffect] Recording is active. Setting up interval. Target end time: ${new Date(recordingEndTimeRef.current).toLocaleTimeString()}`);
+
+      const initialTimeRemaining = Math.max(0, Math.ceil((recordingEndTimeRef.current - Date.now()) / 1000));
+      setTimer(initialTimeRemaining);
+
+      timerIntervalIdRef.current = setInterval(() => {
+        if (recordingEndTimeRef.current === null) {
+          console.error("[TimerEffect_Interval] recordingEndTimeRef became null unexpectedly. Clearing interval.");
+          if (timerIntervalIdRef.current) clearInterval(timerIntervalIdRef.current);
+          timerIntervalIdRef.current = null;
+          if (isRecording || recordingStatus === 'recording' || recordingStatus === 'stopping') {
               setIsRecording(false);
               setRecordingStatus('stopped');
+              setTimer(0);
+              if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+                  mediaRecorderRef.current.stop();
+              }
           }
-      }
-      return;
-    }
-    
-    console.log(`[TimerEffect] Setting up interval. Target end time: ${new Date(recordingEndTimeRef.current).toLocaleTimeString()}, Current time: ${new Date(Date.now()).toLocaleTimeString()}`);
-    
-    // Immediately update displayed timer to full duration
-    // setTimer(Math.max(0, Math.ceil((recordingEndTimeRef.current - Date.now()) / 1000)));
-
-    timerIntervalIdRef.current = setInterval(() => {
-      if (recordingEndTimeRef.current === null) {
-        console.error("[TimerEffect_Interval] recordingEndTimeRef is null, something went wrong. Clearing interval.");
-        if (timerIntervalIdRef.current) clearInterval(timerIntervalIdRef.current);
-        timerIntervalIdRef.current = null;
-        // Attempt to stop recording cleanly if this unexpected state occurs
-        if (isRecording && mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-          mediaRecorderRef.current.stop();
+          return;
         }
-        setIsRecording(false);
-        setRecordingStatus('stopped');
-        setTimer(0);
-        return;
-      }
 
-      const currentTime = Date.now();
-      const timeRemainingSeconds = Math.max(0, Math.ceil((recordingEndTimeRef.current - currentTime) / 1000));
-      
-      // Update the timer state for UI display
-      setTimer(timeRemainingSeconds);
-
-      if (currentTime >= recordingEndTimeRef.current) {
-        console.log("[TimerEffect_Interval] Target end time reached. Clearing interval. Attempting to stop MediaRecorder.");
-        if (timerIntervalIdRef.current) clearInterval(timerIntervalIdRef.current);
-        timerIntervalIdRef.current = null;
-        recordingEndTimeRef.current = null; // Clear the end time
+        const currentTime = Date.now();
+        const timeRemainingSeconds = Math.max(0, Math.ceil((recordingEndTimeRef.current - currentTime) / 1000));
         
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-             console.log("[TimerEffect_Interval] Calling mediaRecorderRef.current.stop() as timer expired.");
-             mediaRecorderRef.current.stop(); 
-             setIsRecording(false); 
-             setRecordingStatus('stopping'); 
-        } else {
-            console.warn("[TimerEffect_Interval] Timer expired, but MediaRecorder not in 'recording' state or not available. State:", mediaRecorderRef.current?.state);
-            setIsRecording(false);
-            setRecordingStatus('stopped');
-            setTimer(0); // Ensure UI timer is 0
+        setTimer(timeRemainingSeconds); 
+
+        if (currentTime >= recordingEndTimeRef.current) {
+          console.log("[TimerEffect_Interval] Target end time reached. Clearing interval. Stopping MediaRecorder.");
+          if (timerIntervalIdRef.current) clearInterval(timerIntervalIdRef.current);
+          timerIntervalIdRef.current = null;
+          recordingEndTimeRef.current = null; 
+          
+          if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+               console.log("[TimerEffect_Interval] Calling mediaRecorderRef.current.stop().");
+               mediaRecorderRef.current.stop(); 
+               setIsRecording(false); 
+               setRecordingStatus('stopping'); 
+          } else {
+              console.warn("[TimerEffect_Interval] Timer expired, but MediaRecorder not in 'recording' state. State: ", mediaRecorderRef.current?.state);
+              setIsRecording(false);
+              setRecordingStatus('stopped');
+              setTimer(0); 
+          }
         }
-      }
-    }, 250); // Check more frequently for better accuracy, e.g., every 250ms
-    
-    return () => {
-      console.log("[TimerEffect] Cleanup: Clearing interval ID:", timerIntervalIdRef.current, " (timer value at cleanup: ", timer, ")");
+      }, 250); 
+
+      return () => {
+        console.log("[TimerEffect] Cleanup: Clearing interval ID:", timerIntervalIdRef.current);
+        if (timerIntervalIdRef.current) {
+          clearInterval(timerIntervalIdRef.current);
+        }
+        timerIntervalIdRef.current = null;
+      };
+    } else {
+      console.log(`[TimerEffect] Conditions not met to run interval (isRecording: ${isRecording}, status: ${recordingStatus}, endTimeSet: ${!!recordingEndTimeRef.current}). Clearing any existing interval.`);
       if (timerIntervalIdRef.current) {
         clearInterval(timerIntervalIdRef.current);
+        timerIntervalIdRef.current = null;
       }
-      timerIntervalIdRef.current = null;
-      // recordingEndTimeRef.current = null; // Don't clear here, might be needed if effect re-runs before stop
-    };
-    // Dependencies: isRecording and recordingStatus trigger start/stop of the interval logic.
-    // timer state is now primarily for display and is set *by* this effect.
-    // recordingEndTimeRef.current being set in onstart will ensure this effect picks up new target time.
-  }, [isRecording, recordingStatus, timer]); // Re-added timer here because setTimer is called inside, needed for initial start of loop.
-                                      // The initial setTimer in onstart to the full duration is the trigger.
-
-  // useEffect for preparation timer (Part 2)
-  useEffect(() => {
-    if (prepTimer === null || !isPreparationTime) return;
-
-    const activeQuestionForPrep = partQuestions[currentQuestionIndex]; 
-
-    const interval = setInterval(() => {
-      setPrepTimer(prevTimer => {
-        if (prevTimer === null || prevTimer <= 0) {
-          clearInterval(interval);
-          setIsPreparationTime(false);
-          console.log("[PrepTimerEffect] Prep time finished. Attempting to start actual recording.");
-          
-          if (activeQuestionForPrep && recordingStatus !== 'recording' && !isRecording) {
-               console.log("[PrepTimerEffect] Conditions met, calling startRecordingInternal for question:", activeQuestionForPrep.id);
-               startRecordingInternal(activeQuestionForPrep); // Pass the question
-          } else {
-              console.warn("[PrepTimerEffect] Conditions not met to start recording after prep time. Question:", activeQuestionForPrep?.id, "Status:", recordingStatus, "isRecording:", isRecording);
-              setUserAction('idle'); // Reset if we can't start
-          }
-          return 0;
-        }
-        return prevTimer - 1;
-      });
-    }, 1000);
-
-    return () => {
-      console.log("[PrepTimerEffect] Cleanup: Clearing interval for prepTimer.");
-      clearInterval(interval);
-    };
-  }, [prepTimer, isPreparationTime, startRecordingInternal, recordingStatus, isRecording, partQuestions, currentQuestionIndex, setUserAction, setIsPreparationTime]);
+      if (!isRecording && recordingStatus !== 'recording' && recordingEndTimeRef.current !== null){
+          console.log("[TimerEffect] Recording stopped/not active, but endTimeRef was set. Clearing endTimeRef.");
+          recordingEndTimeRef.current = null;
+      }
+    }
+  }, [isRecording, recordingStatus]);
 
   // UnmountEffect: Simplified
   useEffect(() => {
