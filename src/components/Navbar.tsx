@@ -1,7 +1,6 @@
 'use client'
 
 import Link from 'next/link'
-import { useAuth } from '@/context/AuthContext'
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -14,9 +13,11 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { LogIn, LogOut, User as UserIcon, LayoutDashboard, Menu } from 'lucide-react'
 import { useState, useEffect } from 'react'
+import { useUser, useAuth, UserButton } from '@clerk/nextjs'
 
 export default function Navbar() {
-  const { user, signOut, isLoading } = useAuth()
+  const { user, isLoaded: isUserLoaded } = useUser()
+  const { signOut } = useAuth()
   const [scrolled, setScrolled] = useState(false)
   
   // Track scroll position for navbar styling
@@ -29,7 +30,7 @@ export default function Navbar() {
     return () => window.removeEventListener('scroll', handleScroll)
   }, [])
 
-  const userInitial = user?.email?.[0]?.toUpperCase() || 'U'
+  const userInitial = user?.emailAddresses?.[0]?.emailAddress?.[0]?.toUpperCase() || 'U'
 
   return (
     <nav 
@@ -60,58 +61,27 @@ export default function Navbar() {
               </Button>
             </Link>
           )}
-          {isLoading ? (
+          {!isUserLoaded ? (
              <div className="w-8 h-8 rounded-full flex items-center justify-center">
                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-600"></div>
              </div>
           ) : user ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" className="relative h-9 w-9 rounded-full overflow-hidden border border-transparent hover:border-gray-200 dark:hover:border-gray-700 transition-colors p-0 ml-1">
-                  <Avatar className="h-8 w-8">
-                     {/* Add AvatarImage if you store user profile pictures */}
-                     {/* <AvatarImage src={user.imageUrl || undefined} alt={user.email || 'User Avatar'} /> */}
-                    <AvatarFallback className="bg-indigo-600 text-white font-medium">
-                      {userInitial}
-                    </AvatarFallback>
-                  </Avatar>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-56 mt-1 overflow-hidden border border-gray-200 dark:border-gray-800 rounded-md" align="end" forceMount>
-                <DropdownMenuLabel className="font-normal bg-gray-50 dark:bg-gray-900 px-4 py-3">
-                  <div className="flex flex-col space-y-1">
-                    <p className="text-sm font-medium leading-none">{user.email?.split('@')[0] || 'User'}</p>
-                    <p className="text-xs leading-none text-muted-foreground">
-                      {user.email}
-                    </p>
-                  </div>
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem asChild>
-                   <Link href="/profile" className="flex items-center w-full cursor-pointer px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-900 transition-colors">
-                     <UserIcon className="mr-2 h-4 w-4 text-indigo-600" /> Profile
-                   </Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                   <Link href="/tests" className="flex items-center w-full cursor-pointer px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-900 transition-colors">
-                     <LayoutDashboard className="mr-2 h-4 w-4 text-indigo-600" /> My Tests
-                   </Link>
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => signOut()} className="px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-900 transition-colors">
-                  <LogOut className="mr-2 h-4 w-4 text-indigo-600" />
-                  Sign out
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <UserButton 
+              afterSignOutUrl="/"
+              appearance={{
+                elements: {
+                  userButtonBox: "h-9 w-9 rounded-full overflow-hidden border border-transparent hover:border-gray-200 dark:hover:border-gray-700 transition-colors p-0 ml-1"
+                }
+              }}
+            />
           ) : (
             <div className="flex items-center gap-2">
-              <Link href="/sign-in" passHref>
+              <Link href="/sign-in">
                 <Button variant="ghost" className="rounded-md font-medium transition-all hover:bg-gray-100 dark:hover:bg-gray-800">
                   Sign in
                 </Button>
               </Link>
-              <Link href="/sign-up" passHref>
+              <Link href="/sign-up">
                 <Button className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-md font-medium">
                   Sign up
                 </Button>
@@ -121,7 +91,7 @@ export default function Navbar() {
         </div>
 
         <div className="flex md:hidden items-center">
-           {isLoading ? (
+           {!isUserLoaded ? (
              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600"></div>
            ) : (
              <DropdownMenu>

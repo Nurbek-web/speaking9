@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs'
 import { cookies } from 'next/headers'
 import { AzureOpenAI } from 'openai'
+import { auth } from '@clerk/nextjs/server'
+import { clerkToSupabaseId } from '@/lib/clerkSupabaseAdapter'
+import fetch from 'node-fetch'
 
 // Configure Azure OpenAI client
 const endpoint = process.env.AZURE_OPENAI_ENDPOINT || ''
@@ -17,55 +20,195 @@ const openai = new AzureOpenAI({
   deployment
 })
 
-export async function POST(request: NextRequest) {
+// Function to transcribe audio using Azure OpenAI Whisper
+async function transcribeAudio(audioData: ArrayBuffer | Buffer, filename: string): Promise<string> {
   try {
-    // Verify authentication
-    const supabase = createRouteHandlerClient({ cookies })
-    const { data: { session } } = await supabase.auth.getSession()
+    // For Azure OpenAI, we need to use a FormData with a file
+    const formData = new FormData()
+    const blob = new Blob([audioData], { type: 'audio/wav' })
+    const file = new File([blob], filename, { type: 'audio/wav' })
     
-    if (!session) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      )
-    }
+    // Add the file to FormData
+    formData.append('file', file)
+    formData.append('model', 'whisper-1')
     
-    // Check if request is multipart form data
-    if (!request.headers.get('content-type')?.includes('multipart/form-data')) {
-      return NextResponse.json(
-        { error: 'Request must be multipart/form-data' },
-        { status: 400 }
-      )
-    }
+    // Create direct API call to Azure OpenAI
+    const apiUrl = `${endpoint}/openai/deployments/${deployment}/audio/transcriptions?api-version=${apiVersion}`
     
-    const formData = await request.formData()
-    const audioFile = formData.get('file') as File
-    
-    if (!audioFile) {
-      return NextResponse.json(
-        { error: 'No audio file provided' },
-        { status: 400 }
-      )
-    }
-    
-    // Convert File to Buffer for OpenAI API
-    const arrayBuffer = await audioFile.arrayBuffer()
-    const buffer = Buffer.from(arrayBuffer)
-    
-    // Create a blob object for OpenAI
-    const blob = new Blob([buffer], { type: audioFile.type })
-    
-    // Transcribe with Azure OpenAI Whisper
-    const transcription = await openai.audio.translations.create({
-      file: new File([blob], audioFile.name, { type: audioFile.type }),
-      model: 'whisper-1', // Required parameter but replaced by deployment in Azure
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'api-key': apiKey
+      },
+      // @ts-ignore - FormData is valid for fetch but TypeScript is confused
+      body: formData
     })
     
-    return NextResponse.json(transcription)
-  } catch (error: any) {
-    console.error('Error in transcription:', error)
+    if (!response.ok) {
+      const errorText = await response.text()
+      throw new Error(`Azure OpenAI API error: ${response.status} - ${errorText}`)
+    }
+    
+    const result = await response.json()
+    return result.text || ''
+  } catch (error) {
+    console.error('Transcription error:', error)
+    throw error
+  }
+}
+
+// Helper to fetch remote audio
+async function fetchRemoteAudio(url: string): Promise<Buffer> {
+  try {
+    const response = await fetch(url)
+    if (!response.ok) {
+      throw new Error(`Failed to fetch remote audio: ${response.status} - ${response.statusText}`)
+    }
+    
+    const arrayBuffer = await response.arrayBuffer()
+    return Buffer.from(arrayBuffer)
+  } catch (error) {
+    console.error('[fetchRemoteAudio] Error:', error)
+    throw error
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    // Authentication - try both Clerk and Supabase
+    let userId = null
+    
+    // First try Clerk auth
+    try {
+      const session = await auth()
+      if (session?.userId) {
+        userId = clerkToSupabaseId(session.userId)
+        console.log(`[API:transcribe] Authenticated via Clerk: ${userId.substring(0, 8)}...`)
+      }
+    } catch (clerkError) {
+      console.error('[API:transcribe] Clerk auth error:', clerkError)
+    }
+    
+    // Try Supabase auth if Clerk failed
+    if (!userId) {
+      try {
+        const supabase = createRouteHandlerClient({ cookies })
+        const { data: { user } } = await supabase.auth.getUser()
+        if (user) {
+          userId = user.id
+          console.log(`[API:transcribe] Authenticated via Supabase: ${userId.substring(0, 8)}...`)
+        }
+      } catch (supabaseError) {
+        console.error('[API:transcribe] Supabase auth error:', supabaseError)
+      }
+    }
+
+    // Parse request - support multiple formats
+    const contentType = request.headers.get('content-type') || ''
+    
+    // Handle JSON payload (including data URLs)
+    if (contentType.includes('application/json')) {
+      const { audioUrl, isDataUrl, userId: clientUserId, questionId } = await request.json()
+      
+      // If no user ID from auth, use the one provided by client
+      if (!userId && clientUserId) {
+        userId = clientUserId
+        console.log(`[API:transcribe] Using client-provided user ID: ${userId.substring(0, 8)}...`)
+      }
+      
+      if (!audioUrl) {
+        return NextResponse.json({ error: 'No audio URL provided' }, { status: 400 })
+      }
+      
+      // Process data URL
+      if ((isDataUrl === true || audioUrl.startsWith('data:'))) {
+        console.log('[API:transcribe] Processing data URL')
+        try {
+          // Convert data URL to buffer
+          const base64Data = audioUrl.split(',')[1]
+          if (!base64Data) {
+            return NextResponse.json(
+              { error: 'Invalid data URL format' },
+              { status: 400 }
+            )
+          }
+          
+          const buffer = Buffer.from(base64Data, 'base64')
+          
+          // Transcribe the audio
+          const text = await transcribeAudio(buffer, `audio-${Date.now()}.wav`)
+          
+          return NextResponse.json({ text })
+        } catch (error) {
+          console.error('[API:transcribe] Data URL processing error:', error)
+          return NextResponse.json(
+            { error: 'Failed to transcribe data URL' },
+            { status: 500 }
+          )
+        }
+      }
+      
+      // Process remote URL
+      if (audioUrl.startsWith('http')) {
+        console.log('[API:transcribe] Processing remote URL')
+        try {
+          // Fetch the remote audio file
+          const audioBuffer = await fetchRemoteAudio(audioUrl)
+          
+          // Transcribe the audio
+          const text = await transcribeAudio(audioBuffer, `audio-${Date.now()}.wav`)
+          
+          return NextResponse.json({ text })
+        } catch (error) {
+          console.error('[API:transcribe] Remote URL processing error:', error)
+          return NextResponse.json(
+            { error: 'Failed to transcribe remote audio' },
+            { status: 500 }
+          )
+        }
+      }
+      
+      return NextResponse.json(
+        { error: 'Unsupported audio URL format' },
+        { status: 400 }
+      )
+    }
+    
+    // Handle multipart form (file upload)
+    if (contentType.includes('multipart/form-data')) {
+      try {
+        const formData = await request.formData()
+        const file = formData.get('file') as File
+        
+        if (!file) {
+          return NextResponse.json({ error: 'No file provided' }, { status: 400 })
+        }
+        
+        // Convert File to Buffer
+        const arrayBuffer = await file.arrayBuffer()
+        
+        // Transcribe the audio
+        const text = await transcribeAudio(arrayBuffer, file.name)
+        
+        return NextResponse.json({ text })
+      } catch (formError) {
+        console.error('[API:transcribe] Form processing error:', formError)
+        return NextResponse.json(
+          { error: 'Failed to process form data' },
+          { status: 500 }
+        )
+      }
+    }
+    
+    // Unsupported content type
     return NextResponse.json(
-      { error: error.message || 'Failed to transcribe audio' },
+      { error: `Unsupported content type: ${contentType}` },
+      { status: 400 }
+    )
+  } catch (error) {
+    console.error('[API:transcribe] Unexpected error:', error)
+    return NextResponse.json(
+      { error: 'Failed to process transcription request' },
       { status: 500 }
     )
   }

@@ -1,64 +1,152 @@
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs"
+import { createTemporarySession } from "@/lib/clerkSupabaseAdapter"
 
-const BUCKET_NAME = 'user_recordings'
+const BUCKET_NAME = 'recordings'
 
 // Helper class to manage storage operations
 export class StorageService {
   private supabase = createClientComponentClient()
   
-  // Ensure the storage bucket exists
-  async ensureBucketExists() {
+  // Function to check if bucket exists (optional, can be removed if relying on manual creation)
+  async checkBucketExists() {
     try {
-      const { data: buckets } = await this.supabase.storage.listBuckets()
-      
-      const bucketExists = buckets?.some(bucket => bucket.name === BUCKET_NAME)
-      
-      if (!bucketExists) {
-        await this.supabase.storage.createBucket(BUCKET_NAME, {
-          public: true,
-          allowedMimeTypes: ['audio/wav', 'audio/mpeg', 'audio/mp4', 'audio/webm'],
-          fileSizeLimit: 50000000 // 50MB limit
-        })
+      const { data: buckets, error } = await this.supabase.storage.listBuckets()
+      if (error) {
+        console.error('StorageService: Error listing buckets:', error)
+        return false // Assume doesn't exist or cannot verify
       }
-      
-      // Make sure the bucket is set to public
-      await this.supabase.storage.updateBucket(BUCKET_NAME, {
-        public: true
-      })
-      
-      return true
+      const bucketExists = buckets?.some(bucket => bucket.name === BUCKET_NAME)
+      if (!bucketExists) {
+        console.warn(`StorageService: Storage bucket "${BUCKET_NAME}" not found.`)
+      }
+      return bucketExists
     } catch (error) {
-      console.error('Error ensuring bucket exists:', error)
+      console.error('StorageService: Error checking bucket existence:', error)
       return false
     }
   }
   
   // Upload audio file
-  async uploadAudio(file: File, userId: string, fileId: string) {
+  async uploadAudio(file: File, userId: string, fileId: string): Promise<string | null> {
+    // Validate inputs to avoid errors
+    if (!file) {
+      console.error('StorageService: Missing file for upload');
+      return null;
+    }
+    
+    if (!userId) {
+      console.warn('StorageService: No user ID provided, using data URL fallback');
+      return await this.createDataUrl(file);
+    }
+    
+    // Generate a filepath that includes userId and fileId with timestamp to avoid collisions
+    const filePath = `${userId}/${fileId}-${Date.now()}.wav`;
+    
     try {
-      await this.ensureBucketExists()
+      // First check if we have a valid session
+      const { data: { session }, error: sessionError } = await this.supabase.auth.getSession();
       
-      const filePath = `recordings/${userId}/${fileId}-${Date.now()}.${file.name.split('.').pop()}`
+      if (sessionError) {
+        console.error('StorageService: Session error:', sessionError);
+        return await this.createDataUrl(file);
+      }
       
+      if (!session) {
+        console.log('StorageService: No valid session found for upload, attempting to create session');
+        
+        try {
+          // Try to create a temporary session
+          const sessionCreated = await createTemporarySession(this.supabase, userId);
+          if (!sessionCreated) {
+            console.warn('StorageService: Could not create temporary session');
+            return await this.createDataUrl(file);
+          }
+        } catch (sessionCreationError) {
+          console.error('StorageService: Error creating temporary session:', sessionCreationError);
+          return await this.createDataUrl(file);
+        }
+      }
+      
+      console.log(`StorageService: Attempting to upload to bucket: "${BUCKET_NAME}", path: "${filePath}"`);
+      
+      // Try to upload the file
       const { data, error } = await this.supabase.storage
         .from(BUCKET_NAME)
         .upload(filePath, file, {
           cacheControl: '3600',
           upsert: true
-        })
+        });
       
-      if (error) throw error
+      // If there's an error, log it and fall back to data URL
+      if (error) {
+        console.error('StorageService: Error uploading file:', error.message);
+        
+        // Check if this might be a bucket existence issue
+        if (error.message.includes('bucket') || 
+            (typeof error === 'object' && 'statusCode' in error && error.statusCode === 404)) {
+          console.warn('StorageService: Bucket may not exist, checking...');
+          const bucketExists = await this.checkBucketExists();
+          console.log(`StorageService: Bucket check result: ${bucketExists ? 'exists' : 'does not exist'}`);
+        }
+        
+        // Check if this is an auth error
+        if ((typeof error === 'object' && 'statusCode' in error && error.statusCode === 401) || 
+            error.message.includes('auth') || 
+            error.message.includes('permission')) {
+          console.warn('StorageService: Authentication error, falling back to data URL');
+        }
+        
+        return await this.createDataUrl(file);
+      }
       
-      // Get the public URL
-      const { data: { publicUrl } } = this.supabase.storage
-        .from(BUCKET_NAME)
-        .getPublicUrl(filePath)
-      
-      return publicUrl
+      // If upload was successful, get the public URL
+      try {
+        const { data: publicUrlData } = await this.supabase.storage
+          .from(BUCKET_NAME)
+          .getPublicUrl(data.path);
+        
+        if (publicUrlData.publicUrl) {
+          console.log('StorageService: Upload successful, returning public URL');
+          return publicUrlData.publicUrl;
+        } else {
+          console.warn('StorageService: Missing public URL, falling back to data URL');
+          return await this.createDataUrl(file);
+        }
+      } catch (urlError) {
+        console.error('StorageService: Error getting public URL:', urlError);
+        return await this.createDataUrl(file);
+      }
     } catch (error) {
-      console.error('Error uploading audio:', error)
-      throw error
+      console.error('StorageService: Upload failed with exception:', error);
+      // Fall back to data URL
+      return await this.createDataUrl(file);
     }
+  }
+  
+  // Create a data URL for the Blob (for fallback when storage uploads fail)
+  async createDataUrl(blob: Blob | File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      try {
+        console.log('StorageService: Creating data URL as fallback');
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          if (typeof reader.result === 'string') {
+            console.log('StorageService: Data URL created successfully');
+            resolve(reader.result);
+          } else {
+            reject(new Error('StorageService: Failed to convert blob to data URL'));
+          }
+        };
+        reader.onerror = () => {
+          console.error('StorageService: FileReader error:', reader.error);
+          reject(reader.error);
+        };
+        reader.readAsDataURL(blob);
+      } catch (error) {
+        console.error('StorageService: Error creating data URL:', error);
+        reject(error);
+      }
+    });
   }
 }
 

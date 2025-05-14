@@ -2,12 +2,13 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs'
 import { cookies } from 'next/headers'
 import { AzureOpenAI } from 'openai'
-import { DefaultAzureCredential } from "@azure/identity"
+import { auth } from '@clerk/nextjs/server'
+import { clerkToSupabaseId } from '@/lib/clerkSupabaseAdapter'
 
 // Configure Azure OpenAI client
 const endpoint = process.env.AZURE_OPENAI_ENDPOINT || ''
-const apiVersion = process.env.AZURE_OPENAI_API_VERSION_GPT || '2025-01-01-preview'
-const deployment = process.env.AZURE_OPENAI_DEPLOYMENT_GPT || 'gpt-4.1'
+const apiVersion = process.env.AZURE_OPENAI_API_VERSION || '2024-06-01'
+const deployment = process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4'
 const apiKey = process.env.AZURE_OPENAI_API_KEY || ''
 
 // Initialize the Azure OpenAI client
@@ -18,176 +19,241 @@ const openai = new AzureOpenAI({
   deployment
 })
 
-// Define types
-type ScoringRequest = {
-  responseId: string
-  questionText: string
-  transcript: string
-  partNumber: number
-}
-
-type FeedbackResult = {
-  fluency_coherence_score: number
-  lexical_resource_score: number
-  grammar_accuracy_score: number
-  pronunciation_score: number
-  overall_band_score: number
-  general_feedback: string
-  fluency_coherence_feedback: string
-  lexical_resource_feedback: string
-  grammar_accuracy_feedback: string
-  pronunciation_feedback: string
-  model_answer: string
-}
-
 export async function POST(request: NextRequest) {
   try {
-    // Verify authentication
-    const supabase = createRouteHandlerClient({ cookies })
-    const { data: { session } } = await supabase.auth.getSession()
+    // Authentication - try both Clerk and Supabase
+    let userId = null
+    let supabase = null;
     
-    if (!session) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      )
+    // First try Clerk auth
+    try {
+      const session = await auth()
+      if (session?.userId) {
+        userId = clerkToSupabaseId(session.userId)
+        console.log(`[API:score] Authenticated via Clerk: ${userId.substring(0, 8)}...`)
+      }
+    } catch (clerkError) {
+      console.error('[API:score] Clerk auth error:', clerkError)
     }
     
-    // Parse request
-    const body: ScoringRequest = await request.json()
-    const { responseId, questionText, transcript, partNumber } = body
+    // Try Supabase auth
+    try {
+      supabase = createRouteHandlerClient({ cookies })
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        userId = user.id
+        console.log(`[API:score] Authenticated via Supabase: ${userId.substring(0, 8)}...`)
+      }
+    } catch (supabaseError) {
+      console.error('[API:score] Supabase auth error:', supabaseError)
+    }
     
-    if (!responseId || !questionText || !transcript) {
+    // Parse the request body
+    const { 
+      userId: clientUserId,
+      questionId, 
+      questionText,
+      questionType,
+      transcript, 
+      audioUrl 
+    } = await request.json()
+    
+    // If no user ID from auth, use the one provided by client
+    if (!userId && clientUserId) {
+      userId = clientUserId
+      console.log(`[API:score] Using client-provided user ID: ${userId.substring(0, 8)}...`)
+    }
+    
+    // Validate required fields
+    if (!transcript) {
       return NextResponse.json(
-        { error: 'Missing required fields' },
+        { error: 'Transcript is required' },
         { status: 400 }
       )
     }
     
-    // Create the prompt for GPT
-    const prompt = generateScoringPrompt(questionText, transcript, partNumber)
+    // Generate scoring prompt based on question type
+    let scoringPrompt = ''
     
-    // Get AI response using Azure OpenAI
-    const completion = await openai.chat.completions.create({
-      messages: [
-        {
-          role: 'system',
-          content: 'You are an expert IELTS speaking examiner with decades of experience. You provide accurate band scores and helpful feedback.'
-        },
-        {
-          role: 'user',
-          content: prompt
-        }
-      ],
-      model: 'gpt-4.1',
-      max_tokens: 2500,
-      temperature: 0.7,
-      top_p: 1,
-      frequency_penalty: 0,
-      presence_penalty: 0,
-      response_format: { type: 'json_object' }
-    })
-    
-    const result = completion.choices[0].message.content
-    
-    if (!result) {
-      throw new Error('Failed to get a valid response from GPT')
+    if (questionType === 'cue_card' || questionType === 'part2') {
+      scoringPrompt = `
+You are an expert IELTS Speaking examiner. Please analyze this Part 2 (Cue Card) response and provide detailed scoring.
+
+Question: ${questionText}
+
+Candidate's Response: ${transcript}
+
+Please provide:
+1. An overall band score (0-9, can use 0.5 increments)
+2. Individual scores for:
+   - Fluency & Coherence (0-9)
+   - Lexical Resource (0-9)
+   - Grammatical Range & Accuracy (0-9)
+   - Pronunciation (0-9)
+3. Brief, specific feedback for each category
+4. 2-3 sentences of general feedback on the overall performance
+5. A model answer that demonstrates Band 9 level response (approx. 1-2 minutes speaking length)
+
+Format your response as a JSON object with the following keys:
+{
+  "bandScore": number,
+  "fluencyCoherence": number,
+  "lexicalResource": number,
+  "grammaticalRange": number,
+  "pronunciation": number,
+  "generalFeedback": "string",
+  "fluencyFeedback": "string",
+  "lexicalFeedback": "string",
+  "grammarFeedback": "string",
+  "pronunciationFeedback": "string",
+  "modelAnswer": "string"
+}
+`
+    } else {
+      // Default to Part 1 or Part 3 question
+      scoringPrompt = `
+You are an expert IELTS Speaking examiner. Please analyze this ${questionType === 'part3' ? 'Part 3' : 'Part 1'} response and provide detailed scoring.
+
+Question: ${questionText}
+
+Candidate's Response: ${transcript}
+
+Please provide:
+1. An overall band score (0-9, can use 0.5 increments)
+2. Individual scores for:
+   - Fluency & Coherence (0-9)
+   - Lexical Resource (0-9)
+   - Grammatical Range & Accuracy (0-9)
+   - Pronunciation (0-9)
+3. Brief, specific feedback for each category
+4. 2-3 sentences of general feedback on the overall performance
+5. A model answer that demonstrates Band 9 level response (be concise, approx. 30 seconds speaking length)
+
+Format your response as a JSON object with the following keys:
+{
+  "bandScore": number,
+  "fluencyCoherence": number,
+  "lexicalResource": number,
+  "grammaticalRange": number,
+  "pronunciation": number,
+  "generalFeedback": "string",
+  "fluencyFeedback": "string",
+  "lexicalFeedback": "string",
+  "grammarFeedback": "string",
+  "pronunciationFeedback": "string",
+  "modelAnswer": "string"
+}
+`
     }
+
+    console.log(`[API:score] Processing transcript for question ID: ${questionId ?? 'unknown'}`)
     
-    // Parse the feedback
-    const feedback: FeedbackResult = JSON.parse(result)
-    
-    // Save the feedback to database
-    const { error } = await supabase
-      .from('feedback')
-      .insert({
-        response_id: responseId,
-        fluency_coherence_score: feedback.fluency_coherence_score,
-        lexical_resource_score: feedback.lexical_resource_score,
-        grammar_accuracy_score: feedback.grammar_accuracy_score,
-        pronunciation_score: feedback.pronunciation_score,
-        overall_band_score: feedback.overall_band_score,
-        general_feedback: feedback.general_feedback,
-        fluency_coherence_feedback: feedback.fluency_coherence_feedback,
-        lexical_resource_feedback: feedback.lexical_resource_feedback,
-        grammar_accuracy_feedback: feedback.grammar_accuracy_feedback,
-        pronunciation_feedback: feedback.pronunciation_feedback,
-        model_answer: feedback.model_answer
+    try {
+      // Call OpenAI API for scoring
+      const completion = await openai.chat.completions.create({
+        model: 'gpt-4', // Will be replaced by deployment id in Azure
+        messages: [
+          {
+            role: 'system',
+            content: 'You are an IELTS Speaking examiner providing detailed feedback in JSON format.'
+          },
+          {
+            role: 'user',
+            content: scoringPrompt
+          }
+        ],
+        response_format: { type: 'json_object' }
       })
-    
-    if (error) {
-      throw error
+
+      // Parse the JSON response
+      const rawFeedback = completion.choices[0]?.message?.content || ''
+      console.log(`[API:score] Generated feedback: ${rawFeedback.substring(0, 50)}...`)
+      
+      try {
+        // Try to parse the JSON response
+        const feedback = JSON.parse(rawFeedback)
+        
+        // Store the scoring in the database if we have a user ID and question ID
+        if (userId && questionId && supabase) {
+          try {
+            console.log(`[API:score] Saving feedback to database for user: ${userId.substring(0, 8)}...`)
+            
+            // First check if we have an existing response
+            const { data: existingResponse, error: fetchError } = await supabase
+              .from('user_responses')
+              .select('id')
+              .eq('user_id', userId)
+              .eq('question_id', questionId)
+              .maybeSingle()
+            
+            if (fetchError) {
+              console.error('[API:score] Error fetching existing response:', fetchError)
+            } else if (existingResponse) {
+              // Update existing response
+              const { error: updateError } = await supabase
+                .from('user_responses')
+                .update({
+                  transcript,
+                  feedback,
+                  audio_url: audioUrl,
+                  updated_at: new Date().toISOString()
+                })
+                .eq('id', existingResponse.id)
+              
+              if (updateError) {
+                console.error('[API:score] Error updating response:', updateError)
+              }
+            } else {
+              // Insert new response
+              const { error: insertError } = await supabase
+                .from('user_responses')
+                .insert({
+                  user_id: userId,
+                  question_id: questionId,
+                  transcript,
+                  feedback,
+                  audio_url: audioUrl,
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString()
+                })
+              
+              if (insertError) {
+                console.error('[API:score] Error inserting response:', insertError)
+              }
+            }
+          } catch (dbError) {
+            console.error('[API:score] Error saving to database:', dbError)
+            // Continue - we'll still return the feedback even if DB save fails
+          }
+        } else {
+          console.log('[API:score] Skipping database save - missing userId, questionId, or supabase client')
+        }
+        
+        // Return the feedback to the client
+        return NextResponse.json({ feedback })
+        
+      } catch (parseError) {
+        console.error('[API:score] Error parsing JSON response:', parseError)
+        return NextResponse.json(
+          { 
+            error: 'Failed to parse AI response',
+            rawResponse: rawFeedback 
+          },
+          { status: 500 }
+        )
+      }
+    } catch (openAiError) {
+      console.error('[API:score] OpenAI API error:', openAiError)
+      return NextResponse.json(
+        { error: 'AI scoring failed' },
+        { status: 500 }
+      )
     }
-    
-    return NextResponse.json(feedback)
-  } catch (error: any) {
-    console.error('Error in scoring:', error)
+  } catch (error) {
+    console.error('[API:score] Unexpected error:', error)
     return NextResponse.json(
-      { error: error.message || 'Failed to score response' },
+      { error: 'Failed to process scoring request' },
       { status: 500 }
     )
   }
-}
-
-function generateScoringPrompt(questionText: string, transcript: string, partNumber: number): string {
-  // Create a specific prompt based on the part of the test
-  let partSpecificInstructions = ''
-  
-  if (partNumber === 1) {
-    partSpecificInstructions = `
-This is from Part 1 of the IELTS Speaking test, which focuses on introductions and general questions.
-The candidate should provide direct answers with some development and personal examples.
-`
-  } else if (partNumber === 2) {
-    partSpecificInstructions = `
-This is from Part 2 of the IELTS Speaking test (the Individual Long Turn).
-The candidate should address all parts of the cue card and speak continuously for 1-2 minutes.
-Evaluate their ability to organize ideas coherently and speak at length.
-`
-  } else if (partNumber === 3) {
-    partSpecificInstructions = `
-This is from Part 3 of the IELTS Speaking test, which involves discussion of more abstract topics.
-The candidate should show ability to express and justify opinions, analyze, discuss and speculate.
-Higher-level vocabulary and complex sentence structures are expected here.
-`
-  }
-  
-  return `
-You are an official IELTS examiner evaluating a speaking test response.
-${partSpecificInstructions}
-
-IELTS Question: "${questionText}"
-
-Candidate's Response (transcribed):
-${transcript}
-
-Please evaluate this response according to the official IELTS Speaking Band Descriptors:
-1. Fluency and Coherence
-2. Lexical Resource
-3. Grammatical Range and Accuracy
-4. Pronunciation
-
-For each category, provide:
-- A score from 0.0 to 9.0 (can use 0.5 increments)
-- Specific feedback with examples from the response
-
-Then calculate an overall band score (average of the four scores, rounded to nearest 0.5).
-
-Finally, provide a model answer that would score 9.0.
-
-Your response must be a valid JSON object with these fields:
-{
-  "fluency_coherence_score": number,
-  "lexical_resource_score": number,
-  "grammar_accuracy_score": number,
-  "pronunciation_score": number,
-  "overall_band_score": number,
-  "general_feedback": string,
-  "fluency_coherence_feedback": string,
-  "lexical_resource_feedback": string,
-  "grammar_accuracy_feedback": string,
-  "pronunciation_feedback": string,
-  "model_answer": string
-}
-`
 } 

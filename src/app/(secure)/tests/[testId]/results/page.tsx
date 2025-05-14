@@ -3,11 +3,12 @@
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
-import { useAuth } from '@/context/AuthContext'
+import { useUser } from '@clerk/nextjs'
 import ProtectedRoute from '@/components/ProtectedRoute'
 import { Loader2, AlertCircle, ArrowLeft, BarChart } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { clerkToSupabaseId } from '@/lib/clerkSupabaseAdapter'
 
 interface Feedback {
   fluency_coherence_score: number
@@ -48,7 +49,7 @@ type TestResult = {
 export default function TestResultsPage() {
   const router = useRouter()
   const { testId } = useParams() as { testId: string }
-  const { user } = useAuth()
+  const { user } = useUser()
   const supabase = createClientComponentClient()
   
   const [loading, setLoading] = useState(true)
@@ -61,6 +62,9 @@ export default function TestResultsPage() {
       
       try {
         setLoading(true)
+        
+        // Convert Clerk ID to Supabase compatible UUID
+        const supabaseUserId = clerkToSupabaseId(user.id)
         
         // Get test information
         const { data: test, error: testError } = await supabase
@@ -76,7 +80,7 @@ export default function TestResultsPage() {
           .from('user_progress')
           .select('*')
           .eq('test_id', testId)
-          .eq('user_id', user.id)
+          .eq('user_id', supabaseUserId)
           .single()
         
         if (progressError) throw progressError
@@ -98,7 +102,7 @@ export default function TestResultsPage() {
               pronunciation_score
             )
           `)
-          .eq('user_id', user.id)
+          .eq('user_id', supabaseUserId)
           .eq('test_questions.test_id', testId)
         
         if (responsesError) throw responsesError
