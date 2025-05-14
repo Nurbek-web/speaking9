@@ -12,6 +12,24 @@ const apiVersion = process.env.AZURE_OPENAI_API_VERSION_WHISPER || '2024-06-01'
 const deployment = process.env.AZURE_OPENAI_DEPLOYMENT_WHISPER || 'whisper'
 const apiKey = process.env.AZURE_OPENAI_API_KEY || ''
 
+// Check if required environment variables are available
+if (!endpoint || !apiKey) {
+  console.error('[API:transcribe] Missing required environment variables:', {
+    hasEndpoint: !!endpoint,
+    hasApiKey: !!apiKey,
+    hasApiVersion: !!apiVersion,
+    hasDeployment: !!deployment
+  });
+}
+
+// Log the configuration (but mask API key)
+console.log('[API:transcribe] Azure OpenAI configuration:', {
+  endpoint: endpoint ? `${endpoint.substring(0, 15)}...` : 'Missing',
+  apiVersion,
+  deployment,
+  hasApiKey: !!apiKey
+});
+
 // Initialize the Azure OpenAI client
 const openai = new AzureOpenAI({
   apiVersion,
@@ -25,15 +43,21 @@ async function transcribeAudio(audioData: ArrayBuffer | Buffer, filename: string
   try {
     // For Azure OpenAI, we need to use a FormData with a file
     const formData = new FormData()
-    const blob = new Blob([audioData], { type: 'audio/wav' })
-    const file = new File([blob], filename, { type: 'audio/wav' })
+    const blob = new Blob([audioData], { type: 'audio/webm' })
+    const file = new File([blob], filename, { type: 'audio/webm' })
     
-    // Add the file to FormData
+    console.log(`[transcribeAudio] Preparing request to ${endpoint}/openai/deployments/${deployment}/audio/transcriptions`);
+    console.log(`[transcribeAudio] File size: ${Math.round((audioData.byteLength || 0) / 1024)} KB`);
+    console.log(`[transcribeAudio] File type: audio/webm, name: ${filename}`);
+    
+    // Add the file to FormData - use 'file' specifically as that's what the API expects
     formData.append('file', file)
     formData.append('model', 'whisper-1')
     
     // Create direct API call to Azure OpenAI
     const apiUrl = `${endpoint}/openai/deployments/${deployment}/audio/transcriptions?api-version=${apiVersion}`
+    
+    console.log(`[transcribeAudio] Sending request to Azure OpenAI API: ${apiUrl}`);
     
     const response = await fetch(apiUrl, {
       method: 'POST',
@@ -46,13 +70,15 @@ async function transcribeAudio(audioData: ArrayBuffer | Buffer, filename: string
     
     if (!response.ok) {
       const errorText = await response.text()
+      console.error(`[transcribeAudio] Azure OpenAI API error: ${response.status}`, errorText);
       throw new Error(`Azure OpenAI API error: ${response.status} - ${errorText}`)
     }
     
     const result = await response.json()
+    console.log(`[transcribeAudio] Successfully received transcript of length: ${result.text?.length || 0} chars`);
     return result.text || ''
   } catch (error) {
-    console.error('Transcription error:', error)
+    console.error('[transcribeAudio] Error:', error)
     throw error
   }
 }
@@ -136,7 +162,7 @@ export async function POST(request: NextRequest) {
           const buffer = Buffer.from(base64Data, 'base64')
           
           // Transcribe the audio
-          const text = await transcribeAudio(buffer, `audio-${Date.now()}.wav`)
+          const text = await transcribeAudio(buffer, `audio-${Date.now()}.webm`)
           
           return NextResponse.json({ text })
         } catch (error) {
@@ -156,7 +182,7 @@ export async function POST(request: NextRequest) {
           const audioBuffer = await fetchRemoteAudio(audioUrl)
           
           // Transcribe the audio
-          const text = await transcribeAudio(audioBuffer, `audio-${Date.now()}.wav`)
+          const text = await transcribeAudio(audioBuffer, `audio-${Date.now()}.webm`)
           
           return NextResponse.json({ text })
         } catch (error) {
@@ -177,26 +203,39 @@ export async function POST(request: NextRequest) {
     // Handle multipart form (file upload)
     if (contentType.includes('multipart/form-data')) {
       try {
-        const formData = await request.formData()
-        const file = formData.get('file') as File
+        console.log('[API:transcribe] Processing multipart form data');
+        const formData = await request.formData();
+        const file = formData.get('file') as File | null;
         
         if (!file) {
-          return NextResponse.json({ error: 'No file provided' }, { status: 400 })
+          console.error('[API:transcribe] No file found in form data');
+          const formKeys = Array.from(formData.keys());
+          console.log('[API:transcribe] Available form fields:', formKeys);
+          return NextResponse.json({ error: 'No file provided' }, { status: 400 });
+        }
+        
+        console.log(`[API:transcribe] Received file: ${file.name}, size: ${Math.round(file.size/1024)}KB, type: ${file.type}`);
+        
+        if (file.size === 0) {
+          console.error('[API:transcribe] File has zero size');
+          return NextResponse.json({ error: 'Empty file provided' }, { status: 400 });
         }
         
         // Convert File to Buffer
-        const arrayBuffer = await file.arrayBuffer()
+        const arrayBuffer = await file.arrayBuffer();
+        console.log(`[API:transcribe] Converted file to ArrayBuffer: ${Math.round(arrayBuffer.byteLength/1024)}KB`);
         
         // Transcribe the audio
-        const text = await transcribeAudio(arrayBuffer, file.name)
+        const text = await transcribeAudio(arrayBuffer, file.name || `audio-${Date.now()}.webm`);
+        console.log(`[API:transcribe] Successfully transcribed audio, text length: ${text.length} chars`);
         
-        return NextResponse.json({ text })
+        return NextResponse.json({ text });
       } catch (formError) {
-        console.error('[API:transcribe] Form processing error:', formError)
+        console.error('[API:transcribe] Form processing error:', formError);
         return NextResponse.json(
-          { error: 'Failed to process form data' },
+          { error: 'Failed to process form data', details: formError instanceof Error ? formError.message : String(formError) },
           { status: 500 }
-        )
+        );
       }
     }
     

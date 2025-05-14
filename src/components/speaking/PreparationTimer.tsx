@@ -15,6 +15,12 @@ const PreparationTimer: React.FC<PreparationTimerProps> = ({
   const [timeRemaining, setTimeRemaining] = useState(initialSeconds);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const startTimeRef = useRef<number>(Date.now());
+  const callbackRef = useRef(onComplete); // Store the callback in a ref to avoid stale closures
+  
+  // Update the callback ref when onComplete changes
+  useEffect(() => {
+    callbackRef.current = onComplete;
+  }, [onComplete]);
   
   // Cleanup function to clear interval
   const clearTimerInterval = () => {
@@ -38,14 +44,14 @@ const PreparationTimer: React.FC<PreparationTimerProps> = ({
       // Check if timer completed
       if (remainingSeconds <= 0) {
         clearTimerInterval();
-        console.log("[PreparationTimer] Timer complete");
-        onComplete();
+        console.log("[PreparationTimer] Timer complete, calling onComplete");
+        callbackRef.current(); // Use the ref to avoid stale closure
       }
     }, 250);
     
     // Clean up interval on unmount or when initialSeconds changes
     return clearTimerInterval;
-  }, [initialSeconds, onComplete]);
+  }, [initialSeconds]); // Remove onComplete from dependencies to avoid re-initializing timer
   
   // Progress percentage (inverted for countdown)
   const progressPercentage = Math.max(0, (timeRemaining / initialSeconds) * 100);
@@ -59,9 +65,10 @@ const PreparationTimer: React.FC<PreparationTimerProps> = ({
 
   // Handle skip button click
   const handleSkip = () => {
-    console.log("[PreparationTimer] Skip button clicked, calling onComplete");
+    console.log("[PreparationTimer] Skip button clicked, calling onComplete directly");
     clearTimerInterval();
-    onComplete();
+    // Use the callbackRef to ensure we have the latest version of the callback
+    callbackRef.current();
   };
   
   return (

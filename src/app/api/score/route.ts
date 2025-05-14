@@ -72,6 +72,34 @@ export async function POST(request: NextRequest) {
       )
     }
     
+    // Handle placeholder transcripts for skipped questions or failed transcriptions
+    const isSkippedQuestion = transcript.includes("[This question was skipped by the user]");
+    const isTranscriptionFailure = transcript.includes("[Audio transcription failed");
+    
+    if (isSkippedQuestion || isTranscriptionFailure) {
+      console.log(`[API:score] Detected special transcript case: ${isSkippedQuestion ? 'skipped question' : 'transcription failure'}`);
+      
+      // Return default feedback for skipped or failed transcriptions
+      const defaultFeedback = {
+        bandScore: isSkippedQuestion ? 5.0 : 6.0,
+        fluencyCoherence: isSkippedQuestion ? 5.0 : 6.0,
+        lexicalResource: isSkippedQuestion ? 5.0 : 6.0,
+        grammaticalRange: isSkippedQuestion ? 5.0 : 6.0,
+        pronunciation: isSkippedQuestion ? 5.0 : 6.0,
+        generalFeedback: isSkippedQuestion 
+          ? "This question was skipped. No audio was recorded for assessment."
+          : "The audio could not be transcribed properly. This is default feedback.",
+        fluencyFeedback: "Unable to assess fluency from the available recording.",
+        lexicalFeedback: "Unable to assess vocabulary usage from the available recording.",
+        grammarFeedback: "Unable to assess grammar from the available recording.",
+        pronunciationFeedback: "Unable to assess pronunciation from the available recording.",
+        modelAnswer: "A model answer would demonstrate relevant vocabulary, good grammar structures, and clear pronunciation."
+      };
+      
+      // Return the default feedback
+      return NextResponse.json({ feedback: defaultFeedback });
+    }
+    
     // Generate scoring prompt based on question type
     let scoringPrompt = ''
     

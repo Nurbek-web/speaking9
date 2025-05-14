@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Button } from '@/components/ui/button';
-import { Mic, Square, SkipForward, ChevronRight, Loader2, Undo, AlertCircle } from 'lucide-react';
+import { Mic, Square, SkipForward, ChevronRight, Loader2, Undo, AlertCircle, Clock } from 'lucide-react';
 import { RecordingStatus } from './types';
 import useRecorder from '@/hooks/useRecorder';
 
@@ -14,6 +14,7 @@ interface AudioRecorderProps {
   onAudioReady: (questionId: string, blob: Blob, url: string) => void;
   onNavigateNext: () => void;
   onSkipQuestion: (questionId: string) => void;
+  onSkipRemainingTime: (questionId: string) => void;
   onMainTimerUpdate?: (seconds: number) => void;
   onPreparationComplete?: () => void;
   onError: (message: string) => void;
@@ -28,6 +29,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   onAudioReady,
   onNavigateNext,
   onSkipQuestion,
+  onSkipRemainingTime,
   onMainTimerUpdate,
   onError
 }) => {
@@ -86,20 +88,26 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
     
     const clonedBlob = new Blob([blob], { type: blob.type });
     setAudioURL(url);
-    onAudioReady(questionId, clonedBlob, url);
+    // Always inform parent that audio is ready (even if it's an empty/skipped recording)
+    onAudioReady(questionId, clonedBlob, url); 
     setIsFinishingUp(false);
     
     const currentAction = userActionRef.current;
+    userActionRef.current = 'idle'; // Reset action after processing its intent
 
-    if (currentAction === 'timerExpired') {
-      setTimeout(() => onNavigateNext(), 1500); // Add small delay to show the recorded state
-    } else if (isNavigating) {
-      setTimeout(() => {
-        setIsNavigating(false);
-        onNavigateNext();
-      }, 100);
+    if (currentAction === 'userSkipped') {
+      // Skip was already handled in handleSkip, do nothing here
+      // This prevents duplicate skip actions
+    } else if (currentAction === 'timerExpired') {
+      // If timer expired, then navigate
+      setTimeout(() => onNavigateNext(), 100); // Small delay
     }
-  }, [questionId, onAudioReady, isNavigating, onNavigateNext]);
+    // Removed the ambiguous `else if (isNavigating)` block.
+    // setIsNavigating(false) should be handled if still needed, based on 'userSkipped' or other explicit actions.
+    if (currentAction === 'userSkipped' || currentAction === 'timerExpired') {
+        setIsNavigating(false); // Reset navigation flag if an action leading to potential navigation was processed
+    }
+  }, [questionId, onAudioReady, onSkipQuestion, onNavigateNext, userActionRef]);
 
   const handleStatusChangeCallback = useCallback((status: RecordingStatus) => {
     setShowVisualizer(status === 'recording');
@@ -177,13 +185,29 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   const handleSkip = useCallback(() => {
     setAudioError(null);
     if (isRecording) {
-      setIsNavigating(true);
-      stopRecording(true);
+      userActionRef.current = 'userSkipped'; // Signal that the stop is due to a user skip
+      setIsNavigating(true); // Indicate that a navigation might follow this skip
+      stopRecording(true); // Stop the recording
+      // Let the MainTestUI component handle navigation via its own handler
     } else {
+      // Not recording, directly inform parent about the skip
       onSkipQuestion(questionId);
+      // MainTestUI (parent) is responsible for navigation after a skip.
+    }
+  }, [isRecording, stopRecording, questionId, onSkipQuestion, userActionRef]);
+
+  // Add new function to handle skipping remaining time
+  const handleSkipRemainingTime = useCallback(() => {
+    setAudioError(null);
+    if (isRecording) {
+      userActionRef.current = 'timerExpired'; // Similar to timer expiring
+      stopRecording(false); // Stop the recording but don't discard it
+      onSkipRemainingTime(questionId); // Inform parent about skipping remaining time
+    } else {
+      // If not recording, treat as a regular navigation
       onNavigateNext();
     }
-  }, [isRecording, stopRecording, onNavigateNext, questionId, onSkipQuestion]);
+  }, [isRecording, stopRecording, questionId, onSkipRemainingTime, userActionRef, onNavigateNext]);
 
   const renderTimer = () => {
     if (timerDisplay === null) return '--:--';
@@ -282,15 +306,26 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           
           {/* Small skip button (only during recording) */}
           {isRecording && !isFinishingUp && !isNavigating && (
-            <button 
-              onClick={handleSkip}
-              className="absolute -right-3 -top-3 p-2 rounded-full bg-white border border-gray-200 hover:bg-gray-50 
+            <>
+              <button 
+                onClick={handleSkip}
+                className="absolute -right-3 -top-3 p-2 rounded-full bg-white border border-gray-200 hover:bg-gray-50 
                          text-gray-500 hover:text-gray-700 transition-colors duration-200 shadow-sm"
-              title="Skip this question"
-              aria-label="Skip this question"
-            >
-              <SkipForward className="h-5 w-5" />
-            </button>
+                title="Skip question completely"
+                aria-label="Skip question completely"
+              >
+                <SkipForward className="h-5 w-5" />
+              </button>
+              <button 
+                onClick={handleSkipRemainingTime}
+                className="absolute -left-3 -top-3 p-2 rounded-full bg-white border border-amber-200 hover:bg-amber-50 
+                         text-amber-500 hover:text-amber-700 transition-colors duration-200 shadow-sm"
+                title="Skip remaining time"
+                aria-label="Skip remaining time"
+              >
+                <Clock className="h-5 w-5" />
+              </button>
+            </>
           )}
         </div>
 
@@ -346,15 +381,6 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
             <ChevronRight className="h-5 w-5" />
             Continue to next question
           </Button>
-          
-          {/* Add a more subtle skip option as a smaller link button below */}
-          <button
-            onClick={handleSkip}
-            className="mt-3 text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1 transition-colors"
-          >
-            <SkipForward className="h-3.5 w-3.5" />
-            Skip this question instead
-          </button>
         </div>
       )}
 

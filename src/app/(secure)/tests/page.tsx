@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useUser } from '@clerk/nextjs'
-import ProtectedRoute from '@/components/ProtectedRoute'
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
 import { Loader2, AlertTriangle } from 'lucide-react'
 import { clerkToSupabaseId } from '@/lib/clerkSupabaseAdapter'
@@ -104,82 +103,80 @@ export default function TestsPage() {
   }
   
   return (
-    <ProtectedRoute>
-      <div className="container mx-auto px-4 py-8">
-        <div className="max-w-4xl mx-auto">
-          <h1 className="text-3xl font-bold mb-6">IELTS Speaking Tests</h1>
-          
-          <p className="mb-6">
-            Welcome{user?.emailAddresses?.[0]?.emailAddress ? `, ${user.emailAddresses[0].emailAddress}` : ''}! Select a test to start practicing.
-          </p>
-          
-          {error && (
-            <div className="my-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded-md">
-              <p><strong>Error:</strong> {error}</p>
-            </div>
-          )}
-          
-          {loading ? (
-            <div className="flex justify-center my-12">
-              <Loader2 className="h-8 w-8 animate-spin text-gray-500" />
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {tests.length === 0 && !error ? (
-                <p>No speaking tests available at the moment.</p>
-              ) : (
-                tests.map((test) => {
-                  if (!test || typeof test.test_id !== 'string' || test.test_id.trim() === '' || test.test_id.toLowerCase() === 'undefined') {
-                    return (
-                      <div key={test?.test_id || Math.random()} className="border border-red-300 rounded-lg p-6 bg-red-50">
-                        <div className="flex items-center mb-2">
-                          <AlertTriangle className="h-5 w-5 text-red-500 mr-2" />
-                          <h2 className="text-lg font-semibold text-red-700">Invalid Test Data</h2>
-                        </div>
-                        <p className="text-sm text-red-600">This test item could not be loaded due to missing or invalid ID.</p>
-                        <p className="text-xs text-gray-500 mt-1">Problematic ID: {String(test?.test_id)}</p>
-                      </div>
-                    )
-                  }
+    <div className="container mx-auto px-4 py-8">
+      <div className="max-w-4xl mx-auto">
+        <h1 className="text-3xl font-bold mb-6">IELTS Speaking Tests</h1>
+        
+        <p className="mb-6">
+          Welcome{user?.emailAddresses?.[0]?.emailAddress ? `, ${user.emailAddresses[0].emailAddress}` : ''}! Select a test to start practicing.
+        </p>
+        
+        {error && (
+          <div className="my-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded-md">
+            <p><strong>Error:</strong> {error}</p>
+          </div>
+        )}
+        
+        {loading ? (
+          <div className="flex justify-center my-12">
+            <Loader2 className="h-8 w-8 animate-spin text-gray-500" />
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {tests.length === 0 && !error ? (
+              <p>No speaking tests available at the moment.</p>
+            ) : (
+              tests.map((test) => {
+                if (!test || typeof test.test_id !== 'string' || test.test_id.trim() === '' || test.test_id.toLowerCase() === 'undefined') {
                   return (
-                    <div 
-                      key={test.test_id} 
-                      className="border border-gray-200 rounded-lg p-6 hover:shadow-md transition-shadow"
-                    >
-                      <h2 className="text-xl font-semibold mb-2">{test.title}</h2>
-                      {test.description && (
-                        <p className="text-sm text-gray-500 mb-4">{test.description}</p>
-                      )}
-                      <div className="flex justify-between items-center">
-                        <div>
-                          <span className="text-sm text-gray-500">
-                            {test.status === 'completed' ? 'Completed' : 
-                             test.status === 'in_progress' ? 'In Progress' : 
-                             'Not Started'}
-                          </span>
-                          {test.average_band_score && (
-                            <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                              Band {test.average_band_score.toFixed(1)}
-                            </span>
-                          )}
-                        </div>
-                        <button 
-                          className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
-                          onClick={() => handleStartTest(test.test_id)}
-                        >
-                          {test.status === 'completed' ? 'Retake Test' : 
-                           test.status === 'in_progress' ? 'Continue' : 
-                           'Start Test'}
-                        </button>
+                    <div key={test?.test_id || Math.random()} className="border border-red-300 rounded-lg p-6 bg-red-50">
+                      <div className="flex items-center mb-2">
+                        <AlertTriangle className="h-5 w-5 text-red-500 mr-2" />
+                        <h2 className="text-lg font-semibold text-red-700">Invalid Test Data</h2>
                       </div>
+                      <p className="text-sm text-red-600">This test item could not be loaded due to missing or invalid ID.</p>
+                      <p className="text-xs text-gray-500 mt-1">Problematic ID: {String(test?.test_id)}</p>
                     </div>
                   )
-                })
-              )}
-            </div>
-          )}
-        </div>
+                }
+                return (
+                  <div 
+                    key={test.test_id} 
+                    className="border border-gray-200 rounded-lg p-6 hover:shadow-md transition-shadow"
+                  >
+                    <h2 className="text-xl font-semibold mb-2">{test.title}</h2>
+                    {test.description && (
+                      <p className="text-sm text-gray-500 mb-4">{test.description}</p>
+                    )}
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <span className="text-sm text-gray-500">
+                          {test.status === 'completed' ? 'Completed' : 
+                           test.status === 'in_progress' ? 'In Progress' : 
+                           'Not Started'}
+                        </span>
+                        {test.average_band_score && (
+                          <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                            Band {test.average_band_score.toFixed(1)}
+                          </span>
+                        )}
+                      </div>
+                      <button 
+                        className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+                        onClick={() => handleStartTest(test.test_id)}
+                      >
+                        {test.status === 'completed' ? 'Retake Test' : 
+                         test.status === 'in_progress' ? 'Continue' : 
+                         'Start Test'}
+                      </button>
+                    </div>
+                  </div>
+                )
+              })
+            )}
+          </div>
+        )}
       </div>
-    </ProtectedRoute>
+    </div>
   )
 } 

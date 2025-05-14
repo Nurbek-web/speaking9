@@ -123,6 +123,26 @@ export class StorageService {
     }
   }
   
+  // Upload recording (convenience method for Blob based recordings)
+  async uploadRecording(blob: Blob, path: string): Promise<string | null> {
+    // Convert Blob to File for compatibility with uploadAudio
+    const parts = path.split('/');
+    if (parts.length < 2) {
+      console.error('StorageService: Invalid path format, expected userId/fileId');
+      return this.createDataUrl(blob);
+    }
+    
+    const userId = parts[0];
+    const fileId = parts[1].split('.')[0]; // Remove extension if present
+    
+    // Convert Blob to File object
+    const file = new File([blob], `${fileId}.webm`, { 
+      type: blob.type || 'audio/webm' 
+    });
+    
+    return this.uploadAudio(file, userId, fileId);
+  }
+  
   // Create a data URL for the Blob (for fallback when storage uploads fail)
   async createDataUrl(blob: Blob | File): Promise<string> {
     return new Promise((resolve, reject) => {

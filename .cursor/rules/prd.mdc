@@ -152,6 +152,8 @@ alwaysApply: true
   * Whisper or Deepgram for speech-to-text
   * TypeScript and Zod for type safety
 
+You Have Supabase MCP access, so you can manipulate database on your own
+
 ---
 
 ## 📋 Implementation Priorities
