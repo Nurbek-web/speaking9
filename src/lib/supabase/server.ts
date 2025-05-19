@@ -10,8 +10,9 @@ export async function createClient() {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
-        get(name: string) {
-          const cookie = cookieStore.get(name);
+        async get(name: string) {
+          const store = await cookieStore;
+          const cookie = store.get(name);
           let value = cookie?.value;
           
           // Handle code verifier cookie prefix
@@ -22,8 +23,9 @@ export async function createClient() {
           
           return value;
         },
-        set(name: string, value: string, options: CookieOptions) {
+        async set(name: string, value: string, options: CookieOptions) {
           try {
+            const store = await cookieStore;
             let cleanedValue = value;
             // Check if it's a Supabase auth token cookie and if it has the erroneous prefix
             if ((name.startsWith('sb-') || name.startsWith('supabase-')) && value.startsWith('base64-')) {
@@ -36,7 +38,7 @@ export async function createClient() {
               console.log(`[SupabaseServerClient] Setting cookie: ${name} (length: ${cleanedValue.length})`);
             }
             
-            cookieStore.set({
+            store.set({
               name,
               value: cleanedValue,
               ...options,
@@ -52,8 +54,9 @@ export async function createClient() {
             // user sessions.
           }
         },
-        remove(name: string, options: CookieOptions) {
+        async remove(name: string, options: CookieOptions) {
           try {
+            const store = await cookieStore;
             // Don't remove code verifier cookies during OAuth flow
             if (name.includes('code-verifier')) {
               console.log(`[SupabaseServerClient] Preserving code verifier cookie: ${name}`);
@@ -61,13 +64,14 @@ export async function createClient() {
             }
             
             console.log(`[SupabaseServerClient] Removing cookie: ${name}`);
-            cookieStore.set({
+            store.set({
               name,
               value: '',
               ...options,
               path: options.path || '/',
             })
           } catch (error) {
+            console.warn(`[SupabaseServerClient] Error removing cookie ${name}:`, error);
             // The `delete` method was called from a Server Component.
             // This can be ignored if you have middleware refreshing
             // user sessions.
