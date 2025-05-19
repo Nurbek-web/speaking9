@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { 
   SkipForward,
   X,
@@ -17,7 +17,7 @@ import { formatTime } from '../testUtils'
 
 // Import speaking-specific components
 import TestSectionHeader from '@/components/speaking/TestSectionHeader'
-import AudioRecorder from '@/components/speaking/AudioRecorder'
+import SimpleAudioRecorder from '@/components/speaking/SimpleAudioRecorder'
 import CountdownDisplay from '@/components/speaking/CountdownDisplay'
 import PreparationTimer from '@/components/speaking/PreparationTimer'
 
@@ -42,6 +42,9 @@ const MainTestUI: React.FC<MainTestUIProps> = ({
   onQuestionTimerUpdate
 }) => {
   const [recordingStatus, setRecordingStatus] = useState<'idle' | 'recording' | 'processing' | 'complete'>('idle');
+  
+  // Use a ref to track the last dispatch to prevent duplicates
+  const lastDispatchRef = useRef<{questionId: string, size: number, timestamp: number} | null>(null);
   
   // Calculate part number (1-indexed) and get the part name
   const partNumber = currentPartIndex + 1;
@@ -78,14 +81,19 @@ const MainTestUI: React.FC<MainTestUIProps> = ({
   }, [dispatch]);
   
   const handleRecordingComplete = useCallback((questionId: string, blob: Blob, url: string) => {
-    // Note: AudioRecorder's onAudioReady provides these args. We need to align.
-    // We'll adjust the call signature when passing this to AudioRecorder.
+    // Set recording status for UI updates
     setRecordingStatus('complete');
+    
+    console.log(`[MainTestUI] handleRecordingComplete called. Question: ${questionId}, blob size: ${blob.size}`);
+    
+    // Simple action dispatch with no extra checks
+    console.log(`[MainTestUI] Dispatching AUDIO_RECORDED for ${questionId}, blob size: ${blob.size} bytes`);
+    
     dispatch({ 
       type: 'AUDIO_RECORDED', 
-      payload: { questionId: currentQuestion.id, audioBlob: blob, url }
+      payload: { questionId, audioBlob: blob, url }
     });
-  }, [currentQuestion.id, dispatch]);
+  }, [dispatch]);
   
   const handleSkipQuestion = useCallback(() => {
     // Prevent multiple rapid clicks
@@ -109,10 +117,40 @@ const MainTestUI: React.FC<MainTestUIProps> = ({
   
   const handleSkipRemainingTime = useCallback(() => {
     console.log('[MainTestUI] handleSkipRemainingTime called for questionId:', currentQuestion.id);
+    
+    // First attempt: Try to stop recording using the window method
+    if (typeof window !== 'undefined' && (window as any).__stopRecordingEarly) {
+      console.log('[MainTestUI] Calling __stopRecordingEarly');
+      (window as any).__stopRecordingEarly();
+    }
+    
+    // Second attempt: Try to use the globalAudioStore directly
+    if (typeof window !== 'undefined' && (window as any).globalAudioStore) {
+      const store = (window as any).globalAudioStore;
+      
+      // Remove from active recordings
+      if (store.activeRecordings && store.activeRecordings.has(currentQuestion.id)) {
+        console.log('[MainTestUI] Removing from active recordings using globalAudioStore');
+        store.activeRecordings.delete(currentQuestion.id);
+      }
+    }
+    
+    // Set local recording status
+    setRecordingStatus('complete');
+    
+    // Dispatch the action to the reducer - this marks as 'completed'
     dispatch({ 
       type: 'SKIP_REMAINING_TIME', 
       payload: { questionId: currentQuestion.id }
     });
+    
+    // Force a short delay to allow recording to finalize
+    setTimeout(() => {
+      console.log('[MainTestUI] Auto-navigating to next question after skipping remaining time');
+      
+      // Navigate to next question regardless
+      dispatch({ type: 'NAVIGATE_TO_NEXT_QUESTION_OR_PART' });
+    }, 1000);
   }, [currentQuestion.id, dispatch]);
   
   const handleNextQuestion = useCallback(() => {
@@ -317,20 +355,27 @@ const MainTestUI: React.FC<MainTestUIProps> = ({
           </div>
           
           <div className="mt-6">
-            <AudioRecorder
-              key={currentQuestion.id}
+            <SimpleAudioRecorder
+              key={`recorder-${currentQuestion.id}`}
               questionId={currentQuestion.id}
-              partType={currentQuestion.part_number === 2 ? 'cue_card' : 'standard'}
-              questionDuration={currentQuestion.speaking_time_seconds || 60}
-              isMuted={isMuted}
-              initialAudioURL={currentResponse?.audio_url}
-              onAudioReady={handleRecordingComplete}
-              onSkipQuestion={handleSkipQuestion}
-              onSkipRemainingTime={handleSkipRemainingTime}
+              duration={currentQuestion.speaking_time_seconds || 60}
+              onComplete={handleRecordingComplete}
               onNavigateNext={handleNextQuestion}
-              onError={handleAudioRecorderError}
-              onMainTimerUpdate={onQuestionTimerUpdate}
             />
+            
+            {/* Add Skip Remaining Time button when recording is in progress */}
+            {!hasRecordedAudio && (
+              <div className="mt-4 flex justify-center">
+                <Button
+                  onClick={handleSkipRemainingTime}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2"
+                  size="sm"
+                >
+                  <SkipForward className="h-4 w-4 mr-2" />
+                  Skip Remaining Time & Continue
+                </Button>
+              </div>
+            )}
           </div>
           
           <div className="mt-6 flex flex-wrap justify-between gap-2">

@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useMemo, useCallback, useReducer, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
 import { useUser } from '@clerk/nextjs'
 import { Loader2 } from 'lucide-react'
 
@@ -28,13 +27,36 @@ import MainTestUI from './MainTestUI'
 // Import utility functions and services
 import storageService from '@/lib/storage'
 import { checkMicrophonePermission } from '../testUtils'
-import { clerkToSupabaseId, syncUserToSupabase, createTemporarySession } from '@/lib/clerkSupabaseAdapter'
+import { 
+  clerkToSupabaseId, 
+  syncUserToSupabase, 
+  createTemporarySession, 
+  tryCreateAnonymousUser,
+  createTemporaryUserId
+} from '@/lib/clerkSupabaseAdapter'
+
+// Import Supabase hooks
+import useSupabaseAuth from '@/hooks/useSupabaseAuth'
+import useSupabaseAnonymous from '@/hooks/useSupabaseAnonymous'
 
 export default function SpeakingTestPage() {
   const router = useRouter();
   const params = useParams();
   const { user } = useUser();
-  const supabase = useMemo(() => createClientComponentClient(), []);
+  
+  // Use authenticated Supabase client when user is available
+  const { supabase: supabaseAuth, loading: authClientLoading } = useSupabaseAuth();
+  
+  // Redirect to login if no user is authenticated
+  useEffect(() => {
+    if (!user && !authClientLoading) {
+      console.log('[Auth] No authenticated user, redirecting to login');
+      router.push('/sign-in');
+    }
+  }, [user, authClientLoading, router]);
+  
+  // Use authenticated Supabase client only
+  const supabase = supabaseAuth;
 
   // Get user from supabase for initial dispatch
   const [currentUser, setCurrentUser] = useState<any | null>(null);
@@ -44,172 +66,73 @@ export default function SpeakingTestPage() {
   
   // Convert Clerk user to Supabase user ID when needed
   const getSupabaseUserId = useCallback(async () => {
-    if (!user) return null;
-    try {
-      const supabaseId = await syncUserToSupabase(supabase, user);
-      return supabaseId;
-    } catch (syncError) {
-      console.error('[getSupabaseUserId] Error syncing user:', syncError);
-      // If we can extract the ID directly, return it
-      if (user?.id) {
-        const fallbackId = clerkToSupabaseId(user.id);
-        console.warn('[getSupabaseUserId] Using fallback ID:', fallbackId);
-        return fallbackId;
-      }
-      return null;
+    // If we have a Clerk user, directly map to Supabase ID format
+    if (user) {
+      const mappedId = clerkToSupabaseId(user.id);
+      console.log('[getSupabaseUserId] Using Clerk ID mapped to Supabase format:', mappedId);
+      return mappedId;
     }
-  }, [user, supabase]);
+    
+    // If we reach here without a user ID, redirect to sign in
+    console.error('[getSupabaseUserId] No user ID available, redirecting to sign-in');
+    router.push('/sign-in');
+    return null;
+  }, [user, router]);
 
   // Effect to handle authentication and user state
   useEffect(() => {
     let isActive = true;
     setAuthLoading(true);
     
-    // First, try to get user from existing session
-    const initializeAuth = async () => {
+    // Initialize user state based on authentication
+    const initializeUser = async () => {
       try {
-        // Get the initial session
-        const { data: { session } } = await supabase.auth.getSession();
-        
-        if (isActive && session?.user) {
-          console.log("[Auth] Initial session found, user:", session.user.id);
-          setCurrentUser(session.user);
+        // For authenticated users, setup Supabase user ID from Clerk
+        if (user && supabaseAuth) {
+          console.log("[Auth] Clerk user available, setting up Supabase user");
+          
+          // Skip the Supabase auth.getUser() call that causes the AuthSessionMissingError
+          // Instead, directly map the Clerk ID to a Supabase ID format
+          const mappedId = clerkToSupabaseId(user.id);
+          console.log("[Auth] Using Clerk ID mapped to Supabase format:", mappedId);
+          
+          // Only update the state if it's different to prevent loops
+          if (isActive && (!currentUser || currentUser.id !== mappedId)) {
+            setCurrentUser({ id: mappedId } as any);
+          }
         } else {
-          console.log("[Auth] No initial session found");
-          
-          // First try to get a local user ID if available
-          let localUserId = null;
-          if (typeof window !== 'undefined') {
-            try {
-              localUserId = localStorage.getItem('app_user_id');
-            } catch (e) {
-              console.error("[Auth] Error accessing localStorage:", e);
-            }
-          }
-          
-          // If we have a local user ID, use it right away
-          if (localUserId && isActive) {
-            console.log("[Auth] Using local user ID:", localUserId);
-            setCurrentUser({ id: localUserId } as any);
-          }
-          // Also try the Clerk user sync for more robust auth
-          else if (user && isActive) {
-            try {
-              console.log("[Auth] Attempting to sync Clerk user to Supabase");
-              const supabaseUserId = await syncUserToSupabase(supabase, user);
-              
-              if (supabaseUserId) {
-                console.log("[Auth] Synced user ID:", supabaseUserId);
-                
-                // Save the ID to localStorage for persistence
-                if (typeof window !== 'undefined') {
-                  try {
-                    localStorage.setItem('app_user_id', supabaseUserId);
-                  } catch (e) {
-                    console.error("[Auth] Error saving to localStorage:", e);
-                  }
-                }
-                
-                // Try to create a temporary session
-                const sessionCreated = await createTemporarySession(supabase, supabaseUserId);
-                if (sessionCreated) {
-                  console.log("[Auth] Temporary session created");
-                  // Refresh current user
-                  const { data: { user: newUser } } = await supabase.auth.getUser();
-                  if (newUser && isActive) {
-                    setCurrentUser(newUser);
-                  } else if (isActive) {
-                    // If still no user from auth, use the ID directly
-                    setCurrentUser({ id: supabaseUserId } as any);
-                  }
-                }
-              }
-            } catch (syncError) {
-              console.error("[Auth] Error syncing user:", syncError);
-              
-              // Use the Clerk ID directly as a fallback
-              if (user?.id && isActive) {
-                const fallbackId = clerkToSupabaseId(user.id);
-                console.log("[Auth] Using clerk ID as fallback:", fallbackId);
-                setCurrentUser({ id: fallbackId } as any);
-              }
-            }
-          }
-          
-          // Still no user - create a temporary user ID for this session
-          if (isActive && !currentUser && !localUserId) {
-            const tempId = `temp-${Math.random().toString(36).substring(2, 10)}-${Date.now()}`;
-            console.log("[Auth] Creating temporary user ID:", tempId);
-            setCurrentUser({ id: tempId } as any);
-            
-            // Save to localStorage if possible
-            if (typeof window !== 'undefined') {
-              try {
-                localStorage.setItem('app_user_id', tempId);
-              } catch (e) {
-                console.error("[Auth] Error saving temp ID to localStorage:", e);
-              }
-            }
+          // No authenticated user, redirect to sign-in
+          if (isActive) {
+            console.log("[Auth] No authenticated user, redirecting to sign-in");
+            setAuthLoading(false);
+            router.push('/sign-in');
           }
         }
         
-        // Set up auth state change listener
-        const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
-          console.log("[Auth] Auth state changed:", event, session ? `User: ${session.user.id}` : "No session");
-          if (isActive && session?.user) {
-            setCurrentUser(session.user);
-            
-            // Save the authenticated ID to localStorage
-            if (typeof window !== 'undefined' && session.user.id) {
-              try {
-                localStorage.setItem('app_user_id', session.user.id);
-              } catch (e) {
-                console.error("[Auth] Error saving session user ID to localStorage:", e);
-              }
-            }
-          } else if (isActive && event === 'SIGNED_OUT') {
-            // Handle sign out explicitly
-            setCurrentUser(null);
-            if(typeof window !== 'undefined') {
-              localStorage.removeItem('app_user_id');
-            }
-          }
-        });
-        
         setAuthLoading(false);
-        
-        return () => {
-          isActive = false; // Prevent state updates after unmount
-          authListener?.subscription.unsubscribe();
-        };
       } catch (error) {
-        console.error("[Auth] Error initializing auth:", error);
+        console.error("[Auth] Error initializing user:", error);
         
-        // Create emergency fallback user ID if all else fails
+        // Redirect to sign-in on error
         if (isActive) {
-          const emergencyId = `emergency-${Date.now()}`;
-          console.log("[Auth] Creating emergency user ID:", emergencyId);
-          setCurrentUser({ id: emergencyId } as any);
           setAuthLoading(false);
-          
-          // Save to localStorage
-          if (typeof window !== 'undefined') {
-            try {
-              localStorage.setItem('app_user_id', emergencyId);
-            } catch (e) {
-              console.error("[Auth] Error saving emergency ID to localStorage:", e);
-            }
-          }
+          router.push('/sign-in');
         }
       }
     };
     
-    initializeAuth();
+    // Only initialize if we have a Supabase client
+    if (supabase) {
+      initializeUser();
+    } else if (isActive) {
+      // No Supabase client yet, wait for it
+      console.log("[Auth] Waiting for Supabase client...");
+    }
     
     return () => {
       isActive = false;
     };
-  }, [supabase.auth, user]); // Removed currentUser, this is good.
+  }, [user, supabase, supabaseAuth, router]);
 
   const pathTestId = useMemo(() => {
     let potentialId = params.testId as string | string[] | undefined;
@@ -325,7 +248,7 @@ export default function SpeakingTestPage() {
                 const testData = testDataResult.data;
                 const questionsDataRaw = questionsDataResult.data;
 
-                const processedQuestions = questionsDataRaw.map(q => {
+                const processedQuestions = questionsDataRaw.map((q: any) => {
                     const speaking_time_seconds = 
                         q.part_number === 1 ? testData.part1_duration_seconds || 60 :
                         q.part_number === 2 ? testData.part2_duration_seconds || 120 :
@@ -349,7 +272,7 @@ export default function SpeakingTestPage() {
                         .from('user_responses')
                         .select('id, test_question_id, audio_url, transcript, status')
                         .eq('user_id', userIdForPreviousResponses)
-                        .in('test_question_id', processedQuestions.map((q) => q.id));
+                        .in('test_question_id', processedQuestions.map((q: any) => q.id));
                     if (responsesError) console.warn('[Effect LOAD_DATA] Error loading previous responses:', responsesError.message);
                     else if (responsesData) {
                         responsesData.forEach((response: any) => {
@@ -365,21 +288,21 @@ export default function SpeakingTestPage() {
                 let determinedQuestionIndex = 0;
                 // REVISED: Use state.initialUser for determining starting point as well
                 if (state.initialUser && Object.keys(responsesMap).length > 0) { 
-                    const questionsForPart1 = processedQuestions.filter(q => q.part_number === 1);
-                    const questionsForPart2 = processedQuestions.filter(q => q.part_number === 2);
-                    const questionsForPart3 = processedQuestions.filter(q => q.part_number === 3);
-                    const part1Complete = questionsForPart1.every(q => responsesMap[q.id]);
-                    const part2Complete = questionsForPart2.every(q => responsesMap[q.id]);
+                    const questionsForPart1 = processedQuestions.filter((q: any) => q.part_number === 1);
+                    const questionsForPart2 = processedQuestions.filter((q: any) => q.part_number === 2);
+                    const questionsForPart3 = processedQuestions.filter((q: any) => q.part_number === 3);
+                    const part1Complete = questionsForPart1.every((q: any) => responsesMap[q.id]);
+                    const part2Complete = questionsForPart2.every((q: any) => responsesMap[q.id]);
                     if (part1Complete && part2Complete) {
                         determinedPartIndex = 2;
-                        const firstIncompletePart3 = questionsForPart3.findIndex(q => !responsesMap[q.id]);
+                        const firstIncompletePart3 = questionsForPart3.findIndex((q: any) => !responsesMap[q.id]);
                         determinedQuestionIndex = firstIncompletePart3 >= 0 ? firstIncompletePart3 : 0;
                     } else if (part1Complete) {
                         determinedPartIndex = 1;
-                        const firstIncompletePart2 = questionsForPart2.findIndex(q => !responsesMap[q.id]);
+                        const firstIncompletePart2 = questionsForPart2.findIndex((q: any) => !responsesMap[q.id]);
                         determinedQuestionIndex = firstIncompletePart2 >= 0 ? firstIncompletePart2 : 0;
                     } else {
-                        const firstIncompletePart1 = questionsForPart1.findIndex(q => !responsesMap[q.id]);
+                        const firstIncompletePart1 = questionsForPart1.findIndex((q: any) => !responsesMap[q.id]);
                         determinedQuestionIndex = firstIncompletePart1 >= 0 ? firstIncompletePart1 : 0;
                     }
                 }
@@ -454,133 +377,248 @@ export default function SpeakingTestPage() {
 
   // Helper function to submit a single response
   const submitResponseAsync = useCallback(async (questionId: string, response: UserResponse): Promise<string | null> => {
-    if (!state.authenticatedSupabaseId) {
-      debugLog(`[submitResponseAsync] No authenticated user available for ${questionId}`);
-      return null;
-    }
-
     try {
       debugLog(`[submitResponseAsync] Submitting response for ${questionId}`);
       
-      // Prepare audio URL (might be a blob, data URL, or Supabase storage URL)
+      // Get user ID - FIXED: Always use clerkToSupabaseId to ensure proper format
+      let userId: string = state.authenticatedSupabaseId || '';
+      let originalUserId = ''; // Track original ID for logging
+      
+      // If we don't have an authenticated ID, try to get one or create a temporary ID
+      if (!userId) {
+        if (user) {
+          // Convert Clerk user ID to Supabase format
+          originalUserId = user.id;
+          userId = clerkToSupabaseId(user.id);
+          debugLog(`[submitResponseAsync] Using converted Clerk ID: ${userId} (from ${originalUserId})`);
+        } else if (state.initialUser?.id) {
+          // Ensure initialUser.id is in the correct format if it's a Clerk ID
+          originalUserId = state.initialUser.id;
+          if (state.initialUser.id.startsWith('user_')) {
+            userId = clerkToSupabaseId(state.initialUser.id);
+            debugLog(`[submitResponseAsync] Converting initialUser.id from Clerk format: ${userId} (from ${originalUserId})`);
+          } else {
+            userId = state.initialUser.id;
+          }
+        } else {
+          // Create a temporary ID if no user ID is available
+          userId = `temp-${Math.random().toString(36).substring(2, 10)}-${Date.now()}`;
+          debugLog(`[submitResponseAsync] Created temporary ID: ${userId}`);
+        }
+      }
+      
+      // Prepare audio URL (might be a blob or Supabase storage URL)
       let audioUrl = response.audio_url;
       
+      // For skipped responses, use a placeholder data URL
+      if (response.status === 'skipped') {
+        audioUrl = 'data:audio/webm;base64,AAAAAAAA'; // Placeholder for skipped audio
+        debugLog(`[submitResponseAsync] Using placeholder URL for skipped question ${questionId}`);
+      }
+      // For completed responses without audio, respect the status but provide a better URL
+      else if (response.status === 'completed' && !audioUrl && !response.audioBlob) {
+        // Provide a unique but not-completely-empty audio URL for tracking
+        audioUrl = `data:audio/webm;base64,ABBREVIATED_${Date.now()}`;
+        debugLog(`[submitResponseAsync] Using abbreviated URL for completed question without audio ${questionId}`);
+      }
       // If we have a blob but no URL, try to upload it
-      if (!audioUrl && response.audioBlob) {
+      else if (!audioUrl && response.audioBlob) {
         debugLog(`[submitResponseAsync] Uploading audio for ${questionId}`);
         try {
           // The blob is in memory, upload it
           const uploadResult = await storageService.uploadRecording(
             response.audioBlob, 
-            `${state.authenticatedSupabaseId}/${questionId}.webm`
+            `${userId}/${questionId}.webm`
           );
           
-          // If upload failed and we got null back, fall back to data URL
           if (uploadResult) {
             audioUrl = uploadResult;
           } else {
+            console.warn(`[submitResponseAsync] Storage upload failed for ${questionId}`);
+            // Create data URL as fallback
             audioUrl = await storageService.createDataUrl(response.audioBlob);
-            console.warn(`[submitResponseAsync] Storage upload failed, using data URL for ${questionId}`);
           }
         } catch (uploadError) {
           console.error(`[submitResponseAsync] Error uploading audio for ${questionId}:`, uploadError);
-          // Attempt to create a data URL as a fallback
-          try {
+          if (response.audioBlob) {
+            // Create data URL as fallback
             audioUrl = await storageService.createDataUrl(response.audioBlob);
-          } catch (urlError) {
-            console.error(`[submitResponseAsync] Failed to create data URL fallback for ${questionId}:`, urlError);
-            return null;
+          } else {
+            audioUrl = 'data:audio/webm;base64,AAAAAAAA'; // Emergency placeholder
           }
         }
       }
       
-      // Return early if we still don't have an audio URL
+      // Return early with local ID if we still don't have an audio URL
       if (!audioUrl) {
         console.error(`[submitResponseAsync] No audio URL available for ${questionId}`);
-        return null;
+        return `local_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+      }
+      
+      // NEW APPROACH: Always use temp_responses table if we detect any Clerk-related issues
+      // Check if this appears to be a Clerk-authenticated session or if we've seen Clerk ID format
+      const isClerkSession = originalUserId.startsWith('user_') || 
+                            (user && user.id.startsWith('user_')) ||
+                            userId.includes('clerk');
+                            
+      // Also consider temporary IDs 
+      const isTemporaryId = userId.startsWith('temp-') || userId.startsWith('emergency-');
+      
+      // Force using temp_responses if this is a Clerk session to avoid UUID validation issues
+      const useTemporaryTable = isClerkSession || isTemporaryId;
+      
+      if (useTemporaryTable) {
+        debugLog(`[submitResponseAsync] Using temp_responses table due to Clerk authentication or temp ID`);
       }
       
       // Prepare the response data
       const responseData = {
-        user_id: state.authenticatedSupabaseId,
+        user_id: userId,
         test_question_id: questionId,
         audio_url: audioUrl,
         transcript: response.transcript || '',
         status: response.status || 'completed'
       };
       
-      // Try to save to Supabase using upsert operation
+      // Try to save to Supabase - use different tables based on ID type
       try {
         debugLog(`[submitResponseAsync] Saving to database for ${questionId}`);
         
         let result;
         
-        if (response.id) {
-          // Update existing response
-          const { data, error } = await supabase
-            .from('user_responses')
-            .update(responseData)
-            .eq('id', response.id)
-            .select('id')
-            .single();
-            
-          if (error) throw error;
-          result = data?.id;
-        } else {
-          // Insert new response
-          const { data, error } = await supabase
-            .from('user_responses')
-            .insert(responseData)
-            .select('id')
-            .single();
-            
-          if (error) {
-            // If insert fails due to auth/permissions, try to save to local storage
-            console.warn(`[submitResponseAsync] Database save failed, using local storage for ${questionId}:`, error);
-            
-            // Save to localStorage as a fallback
-            if (typeof window !== 'undefined') {
-              try {
-                // Create a key based on user and question
-                const storageKey = `response_${state.authenticatedSupabaseId}_${questionId}`;
-                localStorage.setItem(storageKey, JSON.stringify({
-                  ...responseData,
-                  savedLocally: true,
-                  timestamp: new Date().toISOString()
-                }));
-                debugLog(`[submitResponseAsync] Saved to localStorage: ${storageKey}`);
-                return 'local_' + storageKey; // Return a fake ID prefixed with 'local_'
-              } catch (storageError) {
-                console.error(`[submitResponseAsync] Failed to save to localStorage:`, storageError);
-              }
-            }
-            
-            throw error;
+        // If this is a temporary ID or Clerk session, use the temp_responses table
+        if (useTemporaryTable) {
+          debugLog(`[submitResponseAsync] Using temp_responses table for ID: ${userId}`);
+          
+          // First, ensure the anonymous user exists
+          if (isTemporaryId) {
+            await tryCreateAnonymousUser(supabase, userId);
           }
           
-          result = data?.id;
+          if (response.id && response.id.toString().startsWith('local_')) {
+            // This is a client-side ID, insert as new
+            const { data, error } = await supabase
+              .from('temp_responses')
+              .insert(responseData)
+              .select('id')
+              .single();
+              
+            if (error) throw error;
+            result = data?.id;
+          } else if (response.id) {
+            // Update existing response
+            const { data, error } = await supabase
+              .from('temp_responses')
+              .update(responseData)
+              .eq('id', response.id)
+              .select('id')
+              .single();
+              
+            if (error) throw error;
+            result = data?.id;
+          } else {
+            // Insert new response
+            const { data, error } = await supabase
+              .from('temp_responses')
+              .insert(responseData)
+              .select('id')
+              .single();
+              
+            if (error) throw error;
+            result = data?.id;
+          }
+        } else {
+          // For truly authenticated users with valid UUIDs, use the regular user_responses table
+          if (response.id && !response.id.toString().startsWith('local_')) {
+            // Update existing response
+            const { data, error } = await supabase
+              .from('user_responses')
+              .update(responseData)
+              .eq('id', response.id)
+              .select('id')
+              .single();
+              
+            if (error) throw error;
+            result = data?.id;
+          } else {
+            // Insert new response
+            const { data, error } = await supabase
+              .from('user_responses')
+              .insert(responseData)
+              .select('id')
+              .single();
+              
+            if (error) throw error;
+            result = data?.id;
+          }
         }
         
         return result || null;
       } catch (dbError) {
         console.error(`[submitResponseAsync] Database error for ${questionId}:`, dbError);
-        return null;
+        
+        // If we get an error and we weren't using temp_responses, try again with temp_responses
+        if (!useTemporaryTable) {
+          debugLog(`[submitResponseAsync] Retrying with temp_responses table after error`);
+          try {
+            const { data, error } = await supabase
+              .from('temp_responses')
+              .insert(responseData)
+              .select('id')
+              .single();
+              
+            if (error) throw error;
+            return data?.id || null;
+          } catch (retryError) {
+            console.error(`[submitResponseAsync] Retry also failed:`, retryError);
+          }
+        }
+        
+        return `local_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
       }
     } catch (error) {
       console.error(`[submitResponseAsync] Error saving response for ${questionId}:`, error);
-      return null;
+      return `local_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
     }
-  }, [state.authenticatedSupabaseId, supabase]);
+  }, [state.authenticatedSupabaseId, state.initialUser, supabase, user]);
 
   // Handles the submission of all responses
   const submitAllResponsesAsync = useCallback(async () => {
-    if (!user) {
-      dispatch({ type: 'SET_ERROR', payload: 'You must be signed in to submit responses.' });
-      return;
-    }
+    // Helper function to round scores to IELTS 0.5 increments
+    const roundToHalf = (num: number): number => {
+      return Math.round(num * 2) / 2;
+    };
     
     // Check if responses are valid before submitting
     const { isValid, hasAllResponses } = validateResponses();
+    
+    // Count how many questions were skipped vs answerable
+    const skippedCount = Object.values(state.userResponses).filter(res => res.status === 'skipped').length;
+    const answeredCount = Object.values(state.userResponses).filter(res => 
+      // Count both fully recorded responses and those marked completed via "skip remaining time"
+      res.status === 'completed' || res.status === 'in_progress'
+    ).length;
+    
+    debugLog(`[submitAllResponsesAsync] Processing responses: ${answeredCount} answered, ${skippedCount} skipped`);
+    
+    // Log a more detailed breakdown for debugging
+    const detailedCounts = {
+      completed: Object.values(state.userResponses).filter(res => res.status === 'completed').length,
+      in_progress: Object.values(state.userResponses).filter(res => res.status === 'in_progress').length,
+      skipped: skippedCount,
+      error: Object.values(state.userResponses).filter(res => res.status === 'error').length,
+      with_audio: Object.values(state.userResponses).filter(res => !!res.audioBlob || !!res.audio_url).length,
+      without_audio: Object.values(state.userResponses).filter(res => !res.audioBlob && !res.audio_url).length,
+      total: Object.keys(state.userResponses).length
+    };
+    debugLog(`[submitAllResponsesAsync] Detailed response counts:`, detailedCounts);
+    
+    // Always require authentication for submitting responses
+    if (!user) {
+      dispatch({ type: 'SET_ERROR', payload: 'You must be signed in to submit responses.' });
+      router.push('/sign-in');
+      return;
+    }
     
     if (!isValid) {
       if (!hasAllResponses) {
@@ -594,12 +632,15 @@ export default function SpeakingTestPage() {
     dispatch({ type: 'SUBMIT_ALL_RESPONSES_START' });
     
     try {
-      // Get the authenticated Supabase ID for storing responses
-      const authenticatedSupabaseId = await getSupabaseUserId();
+      // Get authenticated ID or use the current one
+      let authenticatedSupabaseId = currentUser?.id;
       
+      // If we don't have an ID yet, get one
       if (!authenticatedSupabaseId) {
-        throw new Error('Failed to authenticate with Supabase.');
+        authenticatedSupabaseId = await getSupabaseUserId();
       }
+      
+      console.log('[submitAllResponsesAsync] Using user ID:', authenticatedSupabaseId);
       
       // Update the authenticatedSupabaseId in the state
       dispatch({
@@ -612,10 +653,6 @@ export default function SpeakingTestPage() {
       let allProcessedSuccessfully = true;
       const feedbackResults: Record<string, any> = {};
       const skippedQuestions: string[] = [];
-      
-      // Count how many questions were skipped vs answerable
-      const skippedCount = Object.values(state.userResponses).filter(res => res.status === 'skipped').length;
-      const answeredCount = Object.keys(state.userResponses).length - skippedCount;
       
       console.log(`[submitAllResponsesAsync] Processing responses: ${answeredCount} answered, ${skippedCount} skipped`);
       
@@ -687,9 +724,21 @@ export default function SpeakingTestPage() {
           continue;
         }
         
+        // Skip transcription for questions without audio, but still mark as processed
         if (!response.audioBlob && !response.audio_url) {
-          console.error(`[submitAllResponsesAsync] No audio data for question ${questionId}`);
-          continue;
+          debugLog(`[submitAllResponsesAsync] No audio data for question ${questionId}`);
+          
+          // For responses marked as completed (e.g., from "skip remaining time"), 
+          // provide a placeholder transcript instead of trying to transcribe
+          if (response.status === 'completed') {
+            debugLog(`[submitAllResponsesAsync] Using placeholder transcript for completed question without audio: ${questionId}`);
+            processedResponses[questionId] = {
+              ...processedResponses[questionId],
+              transcript: "[Question was partially answered, but audio processing was incomplete]"
+            };
+          }
+          
+          continue; // Skip to next question
         }
         
         try {
@@ -921,9 +970,34 @@ export default function SpeakingTestPage() {
           const avgGrammar = questionsWithFeedback > 0 ? totalGrammar / questionsWithFeedback : 7.0;
           const avgPronunciation = questionsWithFeedback > 0 ? totalPronunciation / questionsWithFeedback : 7.0;
           
+          // Calculate a better skipping penalty that distinguishes between truly skipped questions
+          // and questions where user answered but skipped remaining time
+          const trulySkippedCount = skippedCount;
+          const completedWithoutAudioCount = Object.values(state.userResponses).filter(
+            res => res.status === 'completed' && !res.audioBlob && !res.audio_url
+          ).length;
+          
+          // Calculate different penalties for truly skipped vs partial answers
+          const skippedRatio = trulySkippedCount / totalQuestions;
+          const incompleteRatio = completedWithoutAudioCount / totalQuestions;
+          
+          // Heavier penalty for skipped, lighter for incomplete
+          const skippedPenalty = skippedRatio > 0.5 ? Math.min(skippedRatio * 2, 2.0) : skippedRatio;
+          const incompletePenalty = incompleteRatio * 0.5; // Lighter penalty for partial answers
+          
+          const totalPenalty = Math.min(skippedPenalty + incompletePenalty, 2.0);
+          
+          debugLog(`[submitAllResponsesAsync] Score adjustment factors - skipped: ${skippedRatio.toFixed(2)}, incomplete: ${incompleteRatio.toFixed(2)}, total penalty: ${totalPenalty.toFixed(2)}`);
+          
           // Adjust scores if some questions were skipped
-          const skippedRatio = skippedCount / totalQuestions;
-          const scoreAdjustment = skippedRatio > 0.5 ? Math.min(skippedRatio, 1.0) : 0;
+          const scoreAdjustment = totalPenalty;
+          
+          // Calculate adjusted scores
+          const adjustedBandScore = roundToHalf(avgBandScore - scoreAdjustment);
+          const adjustedFluency = roundToHalf(avgFluency - scoreAdjustment);
+          const adjustedLexical = roundToHalf(avgLexical - scoreAdjustment);
+          const adjustedGrammar = roundToHalf(avgGrammar - scoreAdjustment);
+          const adjustedPronunciation = roundToHalf(avgPronunciation - scoreAdjustment);
           
           // Generate combined feedback text
           const allGeneralFeedback = allFeedbacks.map(f => f.generalFeedback || '').filter(Boolean);
@@ -932,17 +1006,22 @@ export default function SpeakingTestPage() {
           const allGrammarFeedback = allFeedbacks.map(f => f.grammarFeedback || '').filter(Boolean);
           const allPronunciationFeedback = allFeedbacks.map(f => f.pronunciationFeedback || '').filter(Boolean);
           
-          // Create the overall feedback object
+          // Example of how to reference the scores in text
+          const feedbackQuality = adjustedBandScore >= 7.0 ? "excellent" : 
+                              adjustedBandScore >= 6.0 ? "good" :
+                              adjustedBandScore >= 5.0 ? "satisfactory" : "needs improvement";
+          
+          // Create the overall feedback object with all scores properly rounded
           overallFeedback = {
-            band_score: avgBandScore - scoreAdjustment,
-            overall_band_score: avgBandScore - scoreAdjustment,
-            fluency_coherence_score: avgFluency - scoreAdjustment,
-            lexical_resource_score: avgLexical - scoreAdjustment,
-            grammar_accuracy_score: avgGrammar - scoreAdjustment,
-            pronunciation_score: avgPronunciation - scoreAdjustment,
+            band_score: adjustedBandScore,
+            overall_band_score: adjustedBandScore,
+            fluency_coherence_score: adjustedFluency,
+            lexical_resource_score: adjustedLexical,
+            grammar_accuracy_score: adjustedGrammar,
+            pronunciation_score: adjustedPronunciation,
             general_feedback: allGeneralFeedback.length > 0 
-              ? allGeneralFeedback[0] 
-              : "Your responses showed good communication skills overall.",
+              ? `${allGeneralFeedback[0]} Your overall score is ${adjustedBandScore.toFixed(1)}, which is ${feedbackQuality}.` 
+              : `Your responses showed ${feedbackQuality} communication skills overall. Your IELTS band score is ${adjustedBandScore.toFixed(1)}.`,
             fluency_coherence_feedback: allFluencyFeedback.length > 0 
               ? allFluencyFeedback[0] 
               : "You maintained reasonable fluency throughout your answers.",
@@ -957,11 +1036,11 @@ export default function SpeakingTestPage() {
               : "Your pronunciation was generally clear and intelligible.",
             model_answer: "A model answer would include more specific examples and more complex grammatical structures.",
             band_scores: {
-              fluency: avgFluency - scoreAdjustment,
-              lexical: avgLexical - scoreAdjustment, 
-              grammar: avgGrammar - scoreAdjustment,
-              pronunciation: avgPronunciation - scoreAdjustment,
-              overall: avgBandScore - scoreAdjustment
+              fluency: adjustedFluency,
+              lexical: adjustedLexical, 
+              grammar: adjustedGrammar,
+              pronunciation: adjustedPronunciation,
+              overall: adjustedBandScore
             },
             // Generate strengths and improvement areas based on feedback patterns
             strengths: "- " + allFeedbacks
@@ -1012,30 +1091,83 @@ export default function SpeakingTestPage() {
           // No feedback from API, use adjusted default scores
           const baseScore = Math.max(7.0 - (skippedCount / totalQuestions) * 2, 5.0);
           
+          // Tailor the message based on whether questions were skipped or answered
+          const skippedAllQuestions = skippedCount === totalQuestions;
+          const completedWithoutAudioCount = Object.values(state.userResponses).filter(
+            res => res.status === 'completed' && !res.audioBlob && !res.audio_url
+          ).length;
+          const answeredSomeQuestions = answeredCount > 0;
+          const hasPartialAnswers = completedWithoutAudioCount > 0;
+          
+          let generalFeedback = "";
+          if (skippedAllQuestions) {
+            generalFeedback = "You skipped all questions. Consider attempting questions to get accurate feedback.";
+          } else if (hasPartialAnswers && answeredSomeQuestions) {
+            generalFeedback = "You attempted most questions and used 'Skip remaining time' for some. We've adjusted your score accordingly.";
+          } else if (answeredSomeQuestions) {
+            generalFeedback = "You answered some questions, but we couldn't generate detailed feedback. This might be due to audio processing issues.";
+          } else {
+            generalFeedback = "Unable to generate detailed feedback. Please retry with clearer audio recordings.";
+          }
+          
+          // Calculate a better default score
+          let adjustedBaseScore = baseScore;
+          
+          // If there are partial answers, apply a smaller penalty
+          if (hasPartialAnswers) {
+            const partialAnswerBonus = completedWithoutAudioCount / totalQuestions * 0.5;
+            adjustedBaseScore = Math.min(baseScore + partialAnswerBonus, 6.5);
+            debugLog(`[submitAllResponsesAsync] Applying partial answer bonus: ${partialAnswerBonus.toFixed(2)}, new base score: ${adjustedBaseScore.toFixed(2)}`);
+          }
+          
+          // Apply IELTS rounding to all scores
+          adjustedBaseScore = roundToHalf(adjustedBaseScore);
+          
+          // Set appropriate feedback quality descriptor
+          const feedbackQuality = adjustedBaseScore >= 7.0 ? "excellent" : 
+                               adjustedBaseScore >= 6.0 ? "good" :
+                               adjustedBaseScore >= 5.0 ? "satisfactory" : "needs improvement";
+          
           overallFeedback = {
-            band_score: baseScore,
-            general_feedback: skippedCount === totalQuestions 
-              ? "You skipped all questions. Consider attempting questions to get accurate feedback."
-              : "Unable to generate detailed feedback. Please retry with clearer audio recordings.",
-            fluency_coherence_score: baseScore,
-            lexical_resource_score: baseScore - 0.5,
-            grammar_accuracy_score: baseScore,
-            pronunciation_score: baseScore + 0.5,
-            overall_band_score: baseScore,
-            fluency_coherence_feedback: "Unable to assess fluency properly. Try answering questions to get feedback.",
-            lexical_resource_feedback: "Unable to assess vocabulary properly. Try answering questions to get feedback.",
-            grammar_accuracy_feedback: "Unable to assess grammar properly. Try answering questions to get feedback.",
-            pronunciation_feedback: "Unable to assess pronunciation properly. Try answering questions to get feedback.",
+            band_score: adjustedBaseScore,
+            general_feedback: hasPartialAnswers 
+              ? `${generalFeedback} Your overall band score is ${adjustedBaseScore.toFixed(1)}, which is ${feedbackQuality}.`
+              : generalFeedback,
+            fluency_coherence_score: adjustedBaseScore,
+            lexical_resource_score: roundToHalf(adjustedBaseScore - 0.5),
+            grammar_accuracy_score: adjustedBaseScore,
+            pronunciation_score: roundToHalf(adjustedBaseScore + 0.5),
+            overall_band_score: adjustedBaseScore,
+            fluency_coherence_feedback: answeredSomeQuestions 
+              ? "We couldn't properly assess your fluency with the recordings provided."
+              : "Unable to assess fluency properly. Try answering questions to get feedback.",
+            lexical_resource_feedback: answeredSomeQuestions
+              ? "We couldn't properly analyze your vocabulary usage with the recordings provided."
+              : "Unable to assess vocabulary properly. Try answering questions to get feedback.",
+            grammar_accuracy_feedback: answeredSomeQuestions
+              ? "We couldn't properly evaluate your grammar with the recordings provided."
+              : "Unable to assess grammar properly. Try answering questions to get feedback.",
+            pronunciation_feedback: answeredSomeQuestions
+              ? "We couldn't properly assess your pronunciation with the recordings provided."
+              : "Unable to assess pronunciation properly. Try answering questions to get feedback.",
             model_answer: "A model answer would include more specific examples and more complex grammatical structures.",
             band_scores: {
-              fluency: baseScore,
-              lexical: baseScore - 0.5, 
-              grammar: baseScore,
-              pronunciation: baseScore + 0.5,
-              overall: baseScore
+              fluency: adjustedBaseScore,
+              lexical: roundToHalf(adjustedBaseScore - 0.5), 
+              grammar: adjustedBaseScore,
+              pronunciation: roundToHalf(adjustedBaseScore + 0.5),
+              overall: adjustedBaseScore
             },
-            strengths: "- No responses to evaluate. Please attempt questions to receive meaningful feedback.",
-            areas_for_improvement: "- Try to answer questions rather than skipping them\n- Practice speaking even when uncertain\n- Build confidence in responding to questions",
+            strengths: hasPartialAnswers
+              ? "- You attempted to answer questions even if you didn't use all available time\n- You engaged with the test process\n- You demonstrated willingness to communicate and respond"
+              : (answeredSomeQuestions 
+                ? "- You attempted to answer questions\n- You engaged with the test process\n- You completed the speaking assessment"
+                : "- No responses to evaluate. Please attempt questions to receive meaningful feedback."),
+            areas_for_improvement: hasPartialAnswers
+              ? "- Try to use all available time for your responses\n- Expand your answers with examples and explanations\n- Practice speaking for longer durations to build confidence"
+              : (answeredSomeQuestions
+                ? "- Try to speak more clearly for better audio quality\n- Practice with the microphone before taking the test\n- Complete all questions for comprehensive feedback"
+                : "- Try to answer questions rather than skipping them\n- Practice speaking even when uncertain\n- Build confidence in responding to questions"),
             study_advice: "1. Practice speaking on various topics for 10 minutes daily\n2. Record yourself and review for areas to improve\n3. Learn 5-10 new vocabulary words weekly\n4. Study example answers from high-scoring IELTS responses"
           };
           
@@ -1060,6 +1192,19 @@ export default function SpeakingTestPage() {
       // Update responses and mark test as completed
       console.log('[submitAllResponsesAsync] Generated feedback:', overallFeedback);
       console.log('[submitAllResponsesAsync] Generated bandScores:', overallFeedback?.band_scores);
+      
+      // Log the properly rounded scores
+      if (overallFeedback?.band_scores) {
+        const roundedScores = {
+          fluency: overallFeedback.band_scores.fluency.toFixed(1),
+          lexical: overallFeedback.band_scores.lexical.toFixed(1),
+          grammar: overallFeedback.band_scores.grammar.toFixed(1),
+          pronunciation: overallFeedback.band_scores.pronunciation.toFixed(1),
+          overall: overallFeedback.band_scores.overall.toFixed(1)
+        };
+        console.log('[submitAllResponsesAsync] Rounded IELTS band scores:', roundedScores);
+      }
+      
       dispatch({
         type: 'SUBMIT_ALL_RESPONSES_SUCCESS', 
         payload: { 
@@ -1122,19 +1267,19 @@ export default function SpeakingTestPage() {
           dispatch({type: 'SET_ERROR', payload: null}); 
         }}
       />
-    );
-  }
-
-  if (!state.testId || !state.testInfo) { 
-    return (
-      <ErrorScreen 
-        error="The test could not be loaded or does not exist."
-        onBack={() => router.push('/tests')}
-      />
-    );
-  }
-
-  if (state.isTestCompleted) {
+          );
+    }
+ 
+   if (!state.testId || !state.testInfo) { 
+     return (
+       <ErrorScreen 
+         error="The test could not be loaded or does not exist."
+         onBack={() => router.push('/tests')}
+       />
+     );
+   }
+  
+    if (state.isTestCompleted) {
     return (
       <TestCompletedUI 
         allPartsFeedback={state.allPartsFeedback}

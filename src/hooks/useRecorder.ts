@@ -38,6 +38,8 @@ const useRecorder = ({
   const recordingEndTimeRef = useRef<number | null>(null);
   const isUnmountingRef = useRef<boolean>(false);
   const processingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isProcessingAudioRef = useRef<boolean>(false); // Track if we're already processing audio
+  const lastProcessedBlobRef = useRef<{size: number, timestamp: number} | null>(null); // Track last processed blob
 
   // Update the local status and notify parent
   const updateRecordingStatus = useCallback((status: RecordingStatus) => {
@@ -181,7 +183,10 @@ const useRecorder = ({
     debugLog('[startRecording] Setting isRecording to true');
     setIsRecording(true);
     updateRecordingStatus('recording');
+    
+    // IMPORTANT: Clear audio chunks for this new recording to prevent stacking
     audioChunksRef.current = [];
+    
     setUserAction('wantsToRecord'); // Indicate user intent
     
     // Set up timer for this recording session
@@ -266,12 +271,17 @@ const useRecorder = ({
         let options: MediaRecorderOptions = {}; // Ensure options is typed
         
         if (isSafari) {
-          // Safari often works better with minimal options
+          // Safari often works better with minimal options or audio/mp4
           debugLog("[startRecording] Safari detected, using audio/mp4 or default recorder options");
           if (MediaRecorder.isTypeSupported('audio/mp4')) {
-            options = { mimeType: 'audio/mp4' };
+            options = { 
+              mimeType: 'audio/mp4',
+              audioBitsPerSecond: 128000  // Use explicit bit rate for better metadata
+            };
           } else {
-            options = {}; // Default MIME type if audio/mp4 not supported
+            options = { 
+              audioBitsPerSecond: 128000 // Simple options for Safari
+            };
           }
         } else {
           // Use appropriate MIME type for other browsers
@@ -291,10 +301,12 @@ const useRecorder = ({
           if (mimeType) {
             options = { 
               mimeType, 
-              audioBitsPerSecond: 128000
+              audioBitsPerSecond: 128000  // Use constant bit rate for better metadata
             };
           } else {
-            options = {}; // Default if no preferred type is supported
+            options = { 
+              audioBitsPerSecond: 128000  // Simple fallback with bit rate
+            };
           }
           debugLog(`[startRecording] Using MIME type: ${options.mimeType || 'browser default'}`);
         }
@@ -400,8 +412,13 @@ const useRecorder = ({
             return;
         }
         if (event.data && event.data.size > 0) {
+          // Store chunk with timestamp to help avoid duplicates
+          const timestamp = Date.now();
+          debugLog(`[useRecorder ondataavailable] Chunk received at ${timestamp}: ${event.data.size} bytes.`);
+          
+          // IMPORTANT: Do not filter chunks by size - we need all audio data
           audioChunksRef.current.push(event.data);
-          debugLog(`[useRecorder ondataavailable] Chunk received: ${event.data.size} bytes. Total chunks: ${audioChunksRef.current.length}. Total size so far: ${audioChunksRef.current.reduce((acc, chunk) => acc + chunk.size, 0)}`);
+          debugLog(`[useRecorder ondataavailable] Added chunk. Total chunks: ${audioChunksRef.current.length}. Total size so far: ${audioChunksRef.current.reduce((acc, chunk) => acc + chunk.size, 0)}`);
         } else {
           debugLog("[useRecorder ondataavailable] Received event with no data or zero size.");
         }
@@ -428,50 +445,117 @@ const useRecorder = ({
           return;
         }
         
+        // Check if we're already processing audio (guard against duplicate onstop events)
+        if (isProcessingAudioRef.current) {
+          debugLog("[onstop] Audio is already being processed, skipping duplicate onstop event");
+          return;
+        }
+        
+        // Set processing flag to true to prevent duplicate processing
+        isProcessingAudioRef.current = true;
+        
         updateRecordingStatus('processing'); // Indicate processing has started
 
         try {
-          if (audioChunksRef.current.length > 0) {
-            // Create blob with the correct mime type - preserve original data
-            debugLog(`[onstop] Processing ${audioChunksRef.current.length} audio chunks, total size: ${ 
-              audioChunksRef.current.reduce((total, chunk) => total + chunk.size, 0)
-            } bytes`);
-            
-            // Create blob with proper type and options for better compatibility
-            let blobOptions: { type?: string } = {}; // Type for blobOptions
-            
-            // For Safari, we need a more explicit type
-            const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-            if (isSafari && MediaRecorder.isTypeSupported('audio/mp4')) {
-              blobOptions = { type: 'audio/mp4' };
-            } else if (recorder.mimeType) {
-              blobOptions = { type: recorder.mimeType };
+          // Small delay to make sure all chunks are collected
+          setTimeout(() => {
+            if (audioChunksRef.current.length > 0) {
+              // Check if we have enough audio data (at least 1 chunk)
+              const totalSize = audioChunksRef.current.reduce((total, chunk) => total + chunk.size, 0);
+              debugLog(`[onstop] Processing ${audioChunksRef.current.length} audio chunks, total size: ${totalSize} bytes`);
+              
+              // Duplicate detection: Check if we recently processed a blob of the same size
+              if (lastProcessedBlobRef.current && 
+                  Math.abs(lastProcessedBlobRef.current.size - totalSize) < 100 && 
+                  Date.now() - lastProcessedBlobRef.current.timestamp < 3000) {
+                debugLog(`[onstop] Potential duplicate blob detected (size ${totalSize} bytes). Skipping processing.`);
+                isProcessingAudioRef.current = false;
+                return;
+              }
+              
+              // Create a local copy of chunks to prevent modifying the original array
+              const currentChunks = [...audioChunksRef.current];
+              
+              // Log chunk information for debugging
+              debugLog(`[onstop] Processing chunks - total count: ${currentChunks.length}`);
+              currentChunks.forEach((chunk, i) => {
+                debugLog(`[onstop] Chunk ${i}: size=${chunk.size} bytes, type=${chunk.type}`);
+              });
+              
+              // Create blob with proper type and options for better compatibility
+              let blobOptions: { type?: string } = {}; // Type for blobOptions
+              
+              // For Safari, we need a more explicit type
+              const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+              if (isSafari && MediaRecorder.isTypeSupported('audio/mp4')) {
+                blobOptions = { type: 'audio/mp4' };
+              } else if (recorder.mimeType) {
+                blobOptions = { type: recorder.mimeType };
+              } else {
+                // Fallback if mimeType is not available or not a standard one we check for
+                blobOptions = { type: currentChunks[0]?.type || 'audio/webm' };
+              }
+              
+              try {
+                // Create the blob with the options using the local copy of chunks
+                const audioBlob = new Blob(currentChunks, blobOptions);
+                
+                debugLog(`[useRecorder onstop] Created audio blob. Size: ${audioBlob.size} bytes, type: ${audioBlob.type}`);
+                
+                // Create URL for playback from the original blob
+                const url = URL.createObjectURL(audioBlob);
+                debugLog(`[onstop] Audio URL created: ${url}`);
+                
+                // Clear audio chunks after creating the blob to prevent duplicate processing
+                audioChunksRef.current = [];
+                
+                // Update status to completed BEFORE onAudioReady to prevent race conditions
+                updateRecordingStatus('completed');
+
+                // Track this blob to prevent duplicates
+                lastProcessedBlobRef.current = {
+                  size: audioBlob.size,
+                  timestamp: Date.now()
+                };
+
+                // Notify parent component with the audioBlob in a scheduled task
+                // This helps prevent multiple rapid callbacks and React state batching issues
+                setTimeout(() => {
+                  // One final check to make sure we're not unmounting
+                  if (!isUnmountingRef.current) {
+                    // Call the callback with created blob and URL
+                    onAudioReady(audioBlob, url);
+                  } else {
+                    debugLog("[onstop] Component unmounted before callback executed");
+                    // Revoke URL if we're unmounting without using it
+                    try {
+                      URL.revokeObjectURL(url);
+                    } catch (e) {
+                      console.error("[onstop] Error revoking URL:", e);
+                    }
+                  }
+                  
+                  // Reset processing flag regardless
+                  isProcessingAudioRef.current = false;
+                }, 50);
+              } catch (err) {
+                console.error("[useRecorder onstop] Error creating blob/URL:", err);
+                onError("Failed to process recording. Please try again.");
+                updateRecordingStatus('error');
+                isProcessingAudioRef.current = false;
+              }
             } else {
-              // Fallback if mimeType is not available or not a standard one we check for
-              blobOptions = { type: audioChunksRef.current[0]?.type || 'audio/webm' };
+              debugLog("[useRecorder onstop] No audio chunks recorded. Calling onError.");
+              onError("No audio was recorded. Please check your microphone and try again.");
+              updateRecordingStatus('error'); // Set to error if no chunks
+              isProcessingAudioRef.current = false; // Reset processing flag on error
             }
-            
-            // Create the blob with the options
-            const audioBlob = new Blob(audioChunksRef.current, blobOptions);
-            
-            debugLog(`[useRecorder onstop] Created audio blob for onAudioReady. Size: ${audioBlob.size} bytes, type: ${audioBlob.type}`);
-            
-            // Create URL for playback from the original blob
-            const url = URL.createObjectURL(audioBlob);
-            debugLog(`[onstop] Audio URL created: ${url}`);
-            
-            // Notify parent component with the audioBlob (not the persistent one, as URL creation keeps it alive)
-            onAudioReady(audioBlob, url);
-            updateRecordingStatus('completed'); // Set to completed AFTER onAudioReady
-          } else {
-            debugLog("[useRecorder onstop] No audio chunks recorded. Calling onError.");
-            onError("No audio was recorded. Please check your microphone and try again.");
-            updateRecordingStatus('error'); // Set to error if no chunks
-          }
+          }, 300); // Add a small delay to make sure we've collected all chunks
         } catch (err) {
           console.error("[useRecorder onstop] Error processing recording:", err);
           onError("Failed to process recording. Please try again.");
           updateRecordingStatus('error');
+          isProcessingAudioRef.current = false; // Reset processing flag on error
         }
         
         // This setIsRecording should be here, after all processing related to onstop
@@ -536,9 +620,10 @@ const useRecorder = ({
       
       // Start recorder immediately with better error handling
       try {
-        debugLog("[useRecorder startRecording] Attempting to call recorder.start(500). Current recorder state:", recorder.state);
-        recorder.start(500); // Request data every 500ms to ensure ondataavailable fires
-        debugLog("[useRecorder startRecording] recorder.start(500) called. New state:", recorder.state);
+        debugLog("[useRecorder startRecording] Attempting to call recorder.start(). Current recorder state:", recorder.state);
+        // Use a small timeslice for better handling of metadata
+        recorder.start(200); // Balance between frequency and metadata accuracy
+        debugLog("[useRecorder startRecording] recorder.start(200) called. New state:", recorder.state);
         
         // Verify recorder is actually recording
         if (recorder.state !== 'recording') {
@@ -603,6 +688,8 @@ const useRecorder = ({
     // Set isUnmountingRef to true when the component is about to unmount.
     // This is primarily for the main component using this hook.
     isUnmountingRef.current = false; // Initialize as false
+    isProcessingAudioRef.current = false; // Initialize processing flag
+    
     return () => {
       debugLog("[useRecorder] Cleanup effect triggered - component unmounting");
       isUnmountingRef.current = true;

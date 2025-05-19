@@ -135,12 +135,24 @@ export class StorageService {
     const userId = parts[0];
     const fileId = parts[1].split('.')[0]; // Remove extension if present
     
+    // For temporary IDs, always use data URL to avoid Supabase UUID constraints
+    if (userId.startsWith('temp-') || userId.startsWith('emergency-')) {
+      console.log('StorageService: Using data URL for temporary user ID');
+      return this.createDataUrl(blob);
+    }
+    
     // Convert Blob to File object
     const file = new File([blob], `${fileId}.webm`, { 
       type: blob.type || 'audio/webm' 
     });
     
-    return this.uploadAudio(file, userId, fileId);
+    // For all other users, try Supabase storage
+    try {
+      return await this.uploadAudio(file, userId, fileId);
+    } catch (error) {
+      console.error('StorageService: Error in uploadRecording, falling back to data URL', error);
+      return this.createDataUrl(blob);
+    }
   }
   
   // Create a data URL for the Blob (for fallback when storage uploads fail)

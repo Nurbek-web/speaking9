@@ -38,6 +38,21 @@ export type Database = {
           }
         ]
       }
+      anonymous_users: {
+        Row: {
+          id: string
+          created_at: string
+        }
+        Insert: {
+          id: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          created_at?: string
+        }
+        Relationships: []
+      }
       tests: {
         Row: {
           id: string
@@ -106,6 +121,57 @@ export type Database = {
           },
           {
             foreignKeyName: "responses_test_id_fkey"
+            columns: ["test_id"]
+            isOneToOne: false
+            referencedRelation: "tests"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
+      temp_responses: {
+        Row: {
+          id: string
+          user_id: string
+          test_id: string
+          part_number: number
+          audio_url: string
+          transcript: string | null
+          band_score: number | null
+          feedback: Json | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          test_id: string
+          part_number: number
+          audio_url: string
+          transcript?: string | null
+          band_score?: number | null
+          feedback?: Json | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          test_id?: string
+          part_number?: number
+          audio_url?: string
+          transcript?: string | null
+          band_score?: number | null
+          feedback?: Json | null
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "temp_responses_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "anonymous_users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "temp_responses_test_id_fkey"
             columns: ["test_id"]
             isOneToOne: false
             referencedRelation: "tests"

@@ -54,18 +54,14 @@ export const getUpdatedQuestionState = (questions: TestQuestion[], partIndex: nu
 
 // Main reducer function
 export function speakingTestReducer(state: SpeakingTestState, action: SpeakingTestAction): SpeakingTestState {
-  // Log all actions for debugging
-  if (action.type === 'END_PREPARATION') {
-    console.log(`[Reducer] Action: ${action.type}`, 
-      action.payload ? `Payload: ${JSON.stringify(action.payload)}` : '(No payload)');
-  }
-
-  // Only log non-timer-related actions to reduce noise
-  if (DEBUG && action.type !== 'INCREMENT_OVERALL_TIMER' && action.type !== 'SET_QUESTION_TIMER') {
-    if ('payload' in action) {
-      debugLog('[Reducer Action]', action.type, 'Payload:', action.payload);
-    } else {
-      debugLog('[Reducer Action]', action.type, '(No payload)');
+  // Log the action in a type-safe way
+  if (DEBUG) {
+    if (action.type !== 'INCREMENT_OVERALL_TIMER' && action.type !== 'SET_QUESTION_TIMER') {
+      debugLog(`[Reducer Action] ${action.type}` + ('payload' in action ? ' (Has payload)' : ' (No payload)'));
+      
+      if ('payload' in action) {
+        debugLog('Payload:', action.payload);
+      }
     }
   }
 
@@ -175,16 +171,47 @@ export function speakingTestReducer(state: SpeakingTestState, action: SpeakingTe
       };
     case 'AUDIO_RECORDED': {
       const { questionId, audioBlob, url } = action.payload;
+      
+      // FINAL DEFENSE AGAINST DUPLICATES
+      debugLog(`[Reducer] Processing AUDIO_RECORDED for ${questionId}, blob size: ${audioBlob?.size} bytes, url: ${url ? url.substring(0, 30) + '...' : 'undefined'}`);
+      
+      // 1. Check if response exists with any audio
+      const existingResponse = state.userResponses[questionId];
+      if (existingResponse?.audioBlob || existingResponse?.audio_url) {
+        debugLog(`[Reducer] SKIPPING: ${questionId} already has audio`);
+        return state; // No change - already has audio
+      }
+      
+      // 2. Validation of data
+      if (!audioBlob || !url) {
+        debugLog(`[Reducer] SKIPPING: ${questionId} has invalid audio data`);
+        return state; // No change - invalid data
+      }
+      
+      // 3. Check for cross-contamination (same URL used elsewhere)
+      const questionsWithSameUrl = Object.entries(state.userResponses)
+        .filter(([_, response]) => response.audio_url === url)
+        .map(([id]) => id);
+      
+      if (questionsWithSameUrl.length > 0) {
+        debugLog(`[Reducer] SKIPPING: URL for ${questionId} is already used in ${questionsWithSameUrl.join(', ')}`);
+        return state; // No change - URL already used
+      }
+      
+      // All clear - proceed with update
+      debugLog(`[Reducer] Updating state with audio for ${questionId}`);
+      
+      // Create new response object
       return {
         ...state,
         userResponses: {
           ...state.userResponses,
           [questionId]: {
-            ...(state.userResponses[questionId] || { test_question_id: questionId }),
+            ...state.userResponses[questionId],
             test_question_id: questionId,
+            status: 'completed',
             audioBlob,
-            audio_url: url,
-            status: 'in_progress',
+            audio_url: url
           }
         }
       };
@@ -206,17 +233,24 @@ export function speakingTestReducer(state: SpeakingTestState, action: SpeakingTe
     case 'SKIP_REMAINING_TIME': {
       const { questionId } = action.payload;
       // Unlike QUESTION_SKIPPED, we don't mark the response as skipped
-      // We just need to force the timer to end, which will be handled by the AudioRecorder component
-      // We preserve any existing audio recording and just skip the remaining time
+      // We want to capture whatever was recorded up to this point
+      
+      // Get the existing response if any
+      const existingResponse = state.userResponses[questionId] || { test_question_id: questionId };
+      
+      // Make sure we don't lose any existing audio data
+      console.log(`[Reducer SKIP_REMAINING_TIME] Processing for question ${questionId}. Has audio:`, 
+        !!existingResponse.audioBlob, !!existingResponse.audio_url);
+      
       return {
         ...state,
         questionTimer: 0, // Set timer to 0 to indicate time is up
         userResponses: {
           ...state.userResponses,
           [questionId]: {
-            ...(state.userResponses[questionId] || { test_question_id: questionId }),
+            ...existingResponse,
             test_question_id: questionId,
-            status: state.userResponses[questionId]?.status || 'in_progress', // Keep existing status
+            status: 'completed', // FIXED: Always mark as completed, not in_progress
           }
         }
       };

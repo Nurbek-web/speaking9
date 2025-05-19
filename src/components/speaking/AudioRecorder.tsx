@@ -35,18 +35,94 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
 }) => {
   // State
   const [audioURL, setAudioURL] = useState<string | null>(initialAudioURL || null);
+  const [audioBlob, setAudioBlob] = useState<Blob | null>(null); // Track the actual blob for playback
   const [audioError, setAudioError] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isNavigating, setIsNavigating] = useState(false);
   const [timerDisplay, setTimerDisplay] = useState<number | null>(null);
   const [showVisualizer, setShowVisualizer] = useState(false);
   const [isFinishingUp, setIsFinishingUp] = useState(false);
+  const [audioDuration, setAudioDuration] = useState<number | null>(null);
+  const [audioPlaybackTime, setAudioPlaybackTime] = useState<number>(0);
   
   // Refs
   const userActionRef = useRef<string>('idle');
   const showPreparation = false; // We're not handling preparation in this component anymore
   const visualizerBarsRef = useRef<number[]>([]);
   const processingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const hasSubmittedRef = useRef<boolean>(false); // Track if this recording has been submitted
+  const lastSubmissionTimeRef = useRef<number>(0); // Track time of last submission
+
+  // Audio element reference for direct control
+  const audioRef = useRef<HTMLAudioElement>(null);
+  
+  // Audio duration calculation from blob size
+  const estimateDurationFromBlob = useCallback((blob: Blob | null): number => {
+    if (!blob) return 5;
+    
+    // Average bitrate for opus is around 32-64kbps
+    // We'll use a conservative estimate of 45kbps
+    const avgBytesPerSecond = 45000 / 8; // Convert to bytes/second
+    const estimatedSeconds = blob.size / avgBytesPerSecond;
+    
+    // Keep the estimate reasonable (minimum 3 sec, maximum 60 sec)
+    return Math.max(3, Math.min(60, Math.round(estimatedSeconds)));
+  }, []);
+
+  // Function to ensure full audio plays correctly
+  const handleAudioPlay = useCallback(() => {
+    if (audioRef.current) {
+      const duration = audioRef.current.duration;
+      
+      // Check if duration is valid (not Infinity or NaN)
+      if (duration && isFinite(duration)) {
+        setAudioDuration(duration);
+        console.log(`[AudioPlayer] Audio playback started. Duration: ${duration}s`);
+      } else {
+        // Estimate duration from blob size
+        const estimatedDuration = estimateDurationFromBlob(audioBlob);
+        setAudioDuration(estimatedDuration);
+        console.log(`[AudioPlayer] Invalid duration (${duration}), estimated: ${estimatedDuration}s`);
+      }
+    }
+  }, [audioBlob, estimateDurationFromBlob]);
+
+  // Function to handle when audio has loaded metadata
+  const handleMetadataLoaded = useCallback(() => {
+    if (audioRef.current) {
+      const duration = audioRef.current.duration;
+      
+      // Check if duration is valid (not Infinity or NaN)
+      if (duration && isFinite(duration)) {
+        setAudioDuration(duration);
+        console.log(`[AudioPlayer] Audio metadata loaded. Duration: ${duration}s`);
+      } else {
+        // Estimate duration from blob size
+        const estimatedDuration = estimateDurationFromBlob(audioBlob);
+        setAudioDuration(estimatedDuration);
+        console.log(`[AudioPlayer] Invalid metadata duration (${duration}), estimated: ${estimatedDuration}s`);
+      }
+    }
+  }, [audioBlob, estimateDurationFromBlob]);
+
+  // Function to handle time updates during playback
+  const handleTimeUpdate = useCallback(() => {
+    if (audioRef.current) {
+      const currentTime = audioRef.current.currentTime;
+      setAudioPlaybackTime(currentTime);
+      
+      // If we've played longer than our current duration estimate, update it
+      if (audioDuration && currentTime > audioDuration) {
+        setAudioDuration(currentTime);
+      }
+    }
+  }, [audioDuration]);
+
+  // Function to handle audio errors
+  const handleAudioError = useCallback((e: React.SyntheticEvent<HTMLAudioElement, Event>) => {
+    console.error("Audio playback error:", e);
+    setAudioError("Could not play recording. Try moving to the next question.");
+  }, []);
 
   // Generate random heights for visualizer on first render
   useEffect(() => {
@@ -65,6 +141,10 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
     setIsFinishingUp(false);
     userActionRef.current = 'idle';
     
+    // Reset submission tracking when question changes
+    hasSubmittedRef.current = false;
+    lastSubmissionTimeRef.current = 0;
+    
     // Clear any existing processing timeout
     if (processingTimeoutRef.current) {
       clearTimeout(processingTimeoutRef.current);
@@ -79,6 +159,37 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
     }
   }, [timerDisplay, onMainTimerUpdate]);
 
+  // Effect to set estimated duration when blob changes but metadata isn't available
+  useEffect(() => {
+    if (audioBlob && !audioDuration) {
+      const estimated = estimateDurationFromBlob(audioBlob);
+      setAudioDuration(estimated);
+    }
+  }, [audioBlob, audioDuration, estimateDurationFromBlob]);
+
+  // Helper to safely create audio URL
+  const createSafeAudioURL = useCallback((blob: Blob): string | null => {
+    try {
+      // Revoke any previous URL from this same component
+      if (audioURL && audioURL.startsWith('blob:') && audioRef.current) {
+        try {
+          URL.revokeObjectURL(audioURL);
+          console.log('[AudioRecorder] Revoked old URL before creating new one');
+        } catch (e) {
+          console.error('[AudioRecorder] Error revoking URL:', e);
+        }
+      }
+      
+      // Create a new URL with a distinct identifier
+      const url = URL.createObjectURL(blob);
+      console.log(`[AudioRecorder] Created audio URL: ${url}`);
+      return url;
+    } catch (e) {
+      console.error('[AudioRecorder] Error creating URL:', e);
+      return null;
+    }
+  }, [audioURL]);
+
   const handleAudioReadyCallback = useCallback((blob: Blob, url: string) => {
     // Clear any processing timeout since audio is now ready
     if (processingTimeoutRef.current) {
@@ -86,10 +197,31 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       processingTimeoutRef.current = null;
     }
     
-    const clonedBlob = new Blob([blob], { type: blob.type });
-    setAudioURL(url);
+    // Prevent duplicate submissions within a short time window (e.g., 1000ms)
+    const now = Date.now();
+    if (hasSubmittedRef.current && now - lastSubmissionTimeRef.current < 1000) {
+      console.log('[AudioRecorder] Preventing duplicate audio submission within 1000ms window');
+      return;
+    }
+    
+    // Mark as submitted and track submission time
+    hasSubmittedRef.current = true;
+    lastSubmissionTimeRef.current = now;
+    
+    console.log(`[AudioRecorder] Audio ready callback triggered. Blob size: ${blob.size} bytes, type: ${blob.type}, duration: calculating...`);
+    
+    // Store the blob itself for safer playback
+    setAudioBlob(blob);
+    
+    // Create our own URL instead of using the provided one
+    // This ensures we have consistent control over URL lifecycle
+    const safeUrl = createSafeAudioURL(blob) || url;
+    
+    // Store the URL
+    setAudioURL(safeUrl);
+    
     // Always inform parent that audio is ready (even if it's an empty/skipped recording)
-    onAudioReady(questionId, clonedBlob, url); 
+    onAudioReady(questionId, blob, safeUrl);
     setIsFinishingUp(false);
     
     const currentAction = userActionRef.current;
@@ -97,17 +229,15 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
 
     if (currentAction === 'userSkipped') {
       // Skip was already handled in handleSkip, do nothing here
-      // This prevents duplicate skip actions
     } else if (currentAction === 'timerExpired') {
       // If timer expired, then navigate
       setTimeout(() => onNavigateNext(), 100); // Small delay
     }
-    // Removed the ambiguous `else if (isNavigating)` block.
-    // setIsNavigating(false) should be handled if still needed, based on 'userSkipped' or other explicit actions.
+    
     if (currentAction === 'userSkipped' || currentAction === 'timerExpired') {
         setIsNavigating(false); // Reset navigation flag if an action leading to potential navigation was processed
     }
-  }, [questionId, onAudioReady, onSkipQuestion, onNavigateNext, userActionRef]);
+  }, [questionId, onAudioReady, onNavigateNext, userActionRef, createSafeAudioURL]);
 
   const handleStatusChangeCallback = useCallback((status: RecordingStatus) => {
     setShowVisualizer(status === 'recording');
@@ -286,6 +416,21 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
     };
   }, []);
 
+  // Clean up any previous URL on unmount
+  useEffect(() => {
+    return () => {
+      // Clean up the URL when component unmounts
+      if (audioURL && audioURL.startsWith('blob:')) {
+        try {
+          URL.revokeObjectURL(audioURL);
+          console.log('[AudioPlayer] Revoked URL on unmount:', audioURL);
+        } catch (e) {
+          console.error('[AudioPlayer] Error revoking URL:', e);
+        }
+      }
+    };
+  }, []);
+
   return (
     <div className="flex flex-col items-center space-y-6 p-8 bg-white rounded-xl shadow-sm border border-gray-100">
       {/* Main recording interface */}
@@ -385,12 +530,42 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       )}
 
       {/* Playback */}
-      {audioURL && !isRecording && recordingStatus !== 'processing' && !isFinishingUp && (
+      {(audioURL || audioBlob) && !isRecording && recordingStatus !== 'processing' && !isFinishingUp && (
         <div className="w-full max-w-md p-4 bg-gray-50 rounded-xl border border-gray-100 mt-3">
           <div className="mb-2 text-sm font-medium text-gray-700">Review your answer:</div>
-          <audio key={audioURL} controls src={audioURL} className="w-full h-10 audio-player">
+          <audio 
+            ref={audioRef}
+            key={`audio-${questionId}-${lastSubmissionTimeRef.current}`} 
+            controls 
+            src={audioURL || ''} 
+            className="w-full h-10 audio-player"
+            preload="metadata"
+            onPlay={handleAudioPlay}
+            onTimeUpdate={handleTimeUpdate}
+            onLoadedMetadata={handleMetadataLoaded}
+            onError={handleAudioError}
+          >
             Your browser does not support audio playback.
           </audio>
+          <div className="mt-2 text-xs text-gray-500 flex justify-between">
+            <span>
+              {audioDuration 
+                ? `Duration: ${Math.round(audioDuration)} seconds` 
+                : audioBlob 
+                  ? `Estimated duration: ${estimateDurationFromBlob(audioBlob)} seconds`
+                  : "Loading audio..."}
+            </span>
+            {audioPlaybackTime > 0 && (
+              <span>
+                Played: {Math.round(audioPlaybackTime)}s
+              </span>
+            )}
+          </div>
+          {audioError && (
+            <div className="mt-2 text-xs text-red-500">
+              {audioError}
+            </div>
+          )}
         </div>
       )}
       
