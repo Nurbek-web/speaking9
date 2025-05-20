@@ -56,12 +56,16 @@ async function transcribeAudio(audioData: ArrayBuffer | Buffer, filename: string
     const apiUrl = `${endpoint}/openai/deployments/${deployment}/audio/transcriptions?api-version=${apiVersion}`;
     console.log(`[transcribeAudio] Sending direct API request to: ${apiUrl}`);
     
+    const headers: HeadersInit = {
+      'Content-Type': `multipart/form-data; boundary=${boundary}`,
+    };
+    if (apiKey) {
+      headers['api-key'] = apiKey;
+    }
+
     const response = await fetch(apiUrl, {
       method: 'POST',
-      headers: {
-        'api-key': apiKey,
-        'Content-Type': `multipart/form-data; boundary=${boundary}`
-      },
+      headers: headers,
       body
     });
     

@@ -184,12 +184,16 @@ Format your response as a JSON object with the following keys:
       
       const apiUrl = `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=${apiVersion}`;
       
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+      };
+      if (apiKey) {
+        headers['api-key'] = apiKey;
+      }
+
       const response = await fetch(apiUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'api-key': apiKey
-        },
+        headers: headers,
         body: JSON.stringify({
           messages: [
             {
