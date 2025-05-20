@@ -1134,11 +1134,34 @@ export default function SpeakingTestPage() {
   // Render logic using state from reducer
   if (authLoading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-b from-indigo-50 to-white">
-        <div className="bg-white rounded-xl shadow-md p-8 w-full max-w-md text-center">
-          <Loader2 className="h-12 w-12 animate-spin text-indigo-600 mx-auto mb-4" />
-          <h2 className="text-xl font-semibold text-gray-800 mb-2">Verifying your account</h2>
-          <p className="text-gray-600">Please wait while we check your login status...</p>
+      <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-b from-white to-gray-50">
+        <div className="w-full max-w-md px-6">
+          {/* App logo */}
+          <div className="flex justify-center mb-12">
+            <div className="h-16 w-16 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl shadow-lg flex items-center justify-center">
+              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                <line x1="12" x2="12" y1="19" y2="22"></line>
+              </svg>
+            </div>
+          </div>
+          
+          {/* Loading animation */}
+          <div className="text-center mb-10">
+            <h1 className="text-2xl font-medium text-gray-900 mb-2">Verifying your account</h1>
+            <p className="text-gray-500">Please wait while we check your login status</p>
+          </div>
+          
+          {/* Pulse animation */}
+          <div className="flex justify-center">
+            <div className="relative">
+              <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center">
+                <div className="w-6 h-6 rounded-full bg-blue-500"></div>
+              </div>
+              <div className="absolute inset-0 rounded-full bg-blue-500 opacity-25 animate-ping"></div>
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -1176,19 +1199,19 @@ export default function SpeakingTestPage() {
           dispatch({type: 'SET_ERROR', payload: null}); 
         }}
       />
-          );
-    }
- 
-   if (!state.testId || !state.testInfo) { 
-     return (
-       <ErrorScreen 
-         error="The test could not be loaded or does not exist."
-         onBack={() => router.push('/tests')}
-       />
-     );
-   }
-  
-    if (state.isTestCompleted) {
+    );
+  }
+
+  if (!state.testId || !state.testInfo) { 
+    return (
+      <ErrorScreen 
+        error="The test could not be loaded or does not exist."
+        onBack={() => router.push('/tests')}
+      />
+    );
+  }
+
+  if (state.isTestCompleted) {
     return (
       <TestCompletedUI 
         allPartsFeedback={state.allPartsFeedback}
@@ -1220,11 +1243,34 @@ export default function SpeakingTestPage() {
           onQuestionTimerUpdate={handleQuestionTimerUpdateForDispatch}
         />
       ) : (
-        <div className="flex flex-col items-center justify-center min-h-screen bg-gray-50">
-          <div className="bg-white rounded-xl shadow-md p-8 max-w-md w-full text-center">
-            <Loader2 className="h-12 w-12 animate-spin text-indigo-600 mx-auto mb-4" />
-            <h2 className="text-xl font-semibold text-gray-800 mb-2">Loading Test Questions</h2>
-            <p className="text-gray-600">Just a moment while we prepare everything...</p>
+        <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-b from-white to-gray-50">
+          <div className="w-full max-w-md px-6">
+            {/* App logo */}
+            <div className="flex justify-center mb-12">
+              <div className="h-16 w-16 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl shadow-lg flex items-center justify-center">
+                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                  <line x1="12" x2="12" y1="19" y2="22"></line>
+                </svg>
+              </div>
+            </div>
+            
+            {/* Loading animation */}
+            <div className="text-center mb-10">
+              <h1 className="text-2xl font-medium text-gray-900 mb-2">Loading Test Questions</h1>
+              <p className="text-gray-500">Just a moment while we prepare everything</p>
+            </div>
+            
+            {/* Shimmer loading effect */}
+            <div className="space-y-4">
+              <div className="h-12 bg-gray-200 rounded-lg animate-pulse"></div>
+              <div className="h-24 bg-gray-200 rounded-lg animate-pulse"></div>
+              <div className="h-12 bg-gray-200 rounded-lg animate-pulse"></div>
+              <div className="flex justify-end mt-4">
+                <div className="h-10 w-32 bg-gray-200 rounded-lg animate-pulse"></div>
+              </div>
+            </div>
           </div>
         </div>
       )}

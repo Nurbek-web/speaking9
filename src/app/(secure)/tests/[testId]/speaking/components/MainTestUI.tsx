@@ -250,10 +250,10 @@ const MainTestUI: React.FC<MainTestUIProps> = ({
   const isLastQuestionInPart = currentQuestionIndex === totalQuestionsInPart - 1;
   const isLastQuestionInTest = currentPartIndex === 2 && isLastQuestionInPart;
   
-  // Preparation mode UI (Part 2 preparation time)
+  // Preparation time UI (for Part 2 cue cards)
   if (isPreparationTime) {
     return (
-      <div className="min-h-screen bg-gray-50 pb-8">
+      <div className="min-h-screen bg-gradient-to-b from-white to-gray-50">
         <TestSectionHeader 
           sectionLabel={partName}
           currentQuestion={currentQuestionNumber}
@@ -265,45 +265,100 @@ const MainTestUI: React.FC<MainTestUIProps> = ({
           toggleMute={handleToggleMute}
         />
         
-        <div className="max-w-3xl mx-auto px-4 pt-6">
-          <div className="bg-white rounded-xl shadow-md p-6 mb-6">
-            <h2 className="text-xl font-semibold text-gray-800 mb-1">Preparation Time</h2>
-            <p className="text-sm text-gray-600 mb-4">
-              You have {currentQuestion.preparation_time_seconds || 60} seconds to prepare your answer for Part 2.
-            </p>
-            
-            <div className="border-l-4 border-indigo-500 bg-indigo-50 p-4 my-6">
-              <div className="prose max-w-none">
-                <p className="font-medium mb-2">Discuss the following topic:</p>
-                <div className="whitespace-pre-line">{currentQuestion.question_text}</div>
+        <div className="max-w-3xl mx-auto px-4 pt-8">
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+            <div className="bg-gradient-to-r from-indigo-50 to-purple-50 px-6 py-5 border-b border-gray-100">
+              <div className="flex justify-between items-center">
+                <div>
+                  <span className="text-xs font-medium text-indigo-600 uppercase tracking-wider">
+                    {partName} - Preparation Time
+                  </span>
+                  <h2 className="text-xl font-semibold text-gray-800 mt-1">
+                    Prepare Your Answer
+                  </h2>
+                </div>
+                
+                <div className="flex items-center bg-white bg-opacity-80 px-3 py-1.5 rounded-full shadow-sm">
+                  <svg className="h-4 w-4 text-indigo-500 mr-1.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <polyline points="12 6 12 12 16 14"></polyline>
+                  </svg>
+                  <span className="text-sm font-medium text-gray-700">
+                    {formatTime(overallTimer)}
+                  </span>
+                </div>
               </div>
             </div>
             
-            <PreparationTimer 
-              initialSeconds={currentQuestion.preparation_time_seconds || 60} 
-              onComplete={handleEndPreparation}
-            />
-            
-            <div className="mt-4 flex justify-between">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleToggleMute}
-                className="flex items-center"
-              >
-                {isMuted ? <VolumeX className="h-4 w-4 mr-1" /> : <Volume2 className="h-4 w-4 mr-1" />}
-                {isMuted ? 'Unmute' : 'Mute'} Sounds
-              </Button>
+            <div className="px-6 py-8">
+              <div className="flex flex-col items-center mb-8">
+                <div className="text-center mb-6">
+                  <span className="inline-block px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-sm font-medium mb-2">
+                    You have 1 minute to prepare
+                  </span>
+                  <h3 className="text-lg font-medium text-gray-800">
+                    Make notes to help with your response
+                  </h3>
+                </div>
+                
+                <div className="w-full max-w-md bg-gradient-to-r from-indigo-500 to-purple-600 rounded-2xl p-[2px] shadow-lg">
+                  <div className="bg-white rounded-2xl p-6">
+                    <p className="font-medium mb-2 text-gray-700">Discuss the following topic:</p>
+                    <div className="whitespace-pre-line text-gray-800 text-lg">{currentQuestion.question_text}</div>
+                  </div>
+                </div>
+              </div>
               
-              <Button 
-                onClick={() => {
-                  console.log("[MainTestUI] Skip Preparation button clicked");
-                  handleEndPreparation();
-                }}
-                size="sm"
-              >
-                Skip Preparation
-              </Button>
+              <div className="flex flex-col items-center mt-10">
+                <PreparationTimer 
+                  initialSeconds={currentQuestion.preparation_time_seconds || 60} 
+                  onComplete={handleEndPreparation}
+                />
+                
+                <div className="mt-8 flex gap-4">
+                  <button
+                    onClick={handleToggleMute}
+                    className="flex items-center px-4 py-2 bg-white border border-gray-200 rounded-full text-gray-700 hover:bg-gray-50 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-gray-200 focus:ring-offset-2"
+                  >
+                    {isMuted ? (
+                      <>
+                        <svg className="h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <line x1="1" y1="1" x2="23" y2="23"></line>
+                          <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"></path>
+                          <path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"></path>
+                          <line x1="12" y1="19" x2="12" y2="23"></line>
+                          <line x1="8" y1="23" x2="16" y2="23"></line>
+                        </svg>
+                        Unmute Sounds
+                      </>
+                    ) : (
+                      <>
+                        <svg className="h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+                          <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                          <line x1="12" y1="19" x2="12" y2="23"></line>
+                          <line x1="8" y1="23" x2="16" y2="23"></line>
+                        </svg>
+                        Mute Sounds
+                      </>
+                    )}
+                  </button>
+                  
+                  <button 
+                    onClick={() => {
+                      console.log("[MainTestUI] Skip Preparation button clicked");
+                      handleEndPreparation();
+                    }}
+                    className="group flex items-center px-5 py-2.5 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white rounded-full shadow-sm transition-all duration-200 hover:shadow focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+                  >
+                    <span>Skip Preparation</span>
+                    <svg className="h-4 w-4 ml-2 transition-transform duration-200 group-hover:translate-x-0.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="5" y1="12" x2="19" y2="12"></line>
+                      <polyline points="12 5 19 12 12 19"></polyline>
+                    </svg>
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -313,7 +368,7 @@ const MainTestUI: React.FC<MainTestUIProps> = ({
   
   // Main speaking test UI
   return (
-    <div className="min-h-screen bg-gray-50 pb-24">
+    <div className="min-h-screen bg-gradient-to-b from-white to-gray-50 pb-24">
       <TestSectionHeader 
         sectionLabel={partName}
         currentQuestion={currentQuestionNumber}
@@ -325,144 +380,220 @@ const MainTestUI: React.FC<MainTestUIProps> = ({
         toggleMute={handleToggleMute}
       />
       
-      <main className="max-w-3xl mx-auto px-4 pt-6">
+      <main className="max-w-3xl mx-auto px-4 pt-8">
         {error && (
-          <Alert variant="destructive" className="mb-6">
-            <AlertCircle className="h-4 w-4" />
-            <AlertTitle>Error</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
+          <div className="mb-6 bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex items-start">
+            <div className="flex-shrink-0 mt-0.5">
+              <svg className="h-5 w-5 text-red-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="8" x2="12" y2="12"></line>
+                <line x1="12" y1="16" x2="12.01" y2="16"></line>
+              </svg>
+            </div>
+            <div className="ml-3">
+              <h3 className="text-sm font-medium text-red-800">Error</h3>
+              <p className="text-sm text-red-700 mt-1">{error}</p>
+            </div>
+          </div>
         )}
         
-        <div className="bg-white rounded-xl shadow-md p-6 mb-6">
-          <div className="flex justify-between items-start mb-4">
-            <h2 className="text-xl font-semibold text-gray-800">
-              {isPart2 ? 'Cue Card' : 'Question'} {currentQuestionNumber} of {totalQuestionsInPart}
-            </h2>
-            
-            <div className="flex items-center">
-              <Clock className="h-4 w-4 text-gray-500 mr-1" />
-              <span className="text-sm text-gray-500">
-                {formatTime(overallTimer)}
-              </span>
-            </div>
-          </div>
-          
-          <div className={`${isPart2 ? 'border-l-4 border-indigo-500 bg-indigo-50' : ''} p-4 mb-6`}>
-            <div className="prose max-w-none">
-              <div className="whitespace-pre-line">{currentQuestion.question_text}</div>
-            </div>
-          </div>
-          
-          <div className="mt-6">
-            <SimpleAudioRecorder
-              key={`recorder-${currentQuestion.id}`}
-              questionId={currentQuestion.id}
-              duration={currentQuestion.speaking_time_seconds || 60}
-              onComplete={handleRecordingComplete}
-              onNavigateNext={handleNextQuestion}
-            />
-            
-            {/* Add Skip Remaining Time button when recording is in progress */}
-            {!hasRecordedAudio && (
-              <div className="mt-4 flex justify-center">
-                <Button
-                  onClick={handleSkipRemainingTime}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2"
-                  size="sm"
-                >
-                  <SkipForward className="h-4 w-4 mr-2" />
-                  Skip Remaining Time & Continue
-                </Button>
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden mb-8">
+          {/* Question header with subtle gradient background */}
+          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 px-6 py-5 border-b border-gray-100">
+            <div className="flex justify-between items-center">
+              <div>
+                <span className="text-xs font-medium text-blue-600 uppercase tracking-wider">
+                  {partName}
+                </span>
+                <h2 className="text-xl font-semibold text-gray-800 mt-1">
+                  {isPart2 ? 'Cue Card' : 'Question'} {currentQuestionNumber} of {totalQuestionsInPart}
+                </h2>
               </div>
-            )}
+              
+              <div className="flex items-center bg-white bg-opacity-80 px-3 py-1.5 rounded-full shadow-sm">
+                <svg className="h-4 w-4 text-blue-500 mr-1.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <polyline points="12 6 12 12 16 14"></polyline>
+                </svg>
+                <span className="text-sm font-medium text-gray-700">
+                  {formatTime(overallTimer)}
+                </span>
+              </div>
+            </div>
           </div>
           
-          <div className="mt-6 flex flex-wrap justify-between gap-2">
-            <Button
-              variant="outline"
-              onClick={handleToggleMute}
-              className="flex items-center"
+          {/* Question content */}
+          <div className="px-6 py-6">
+            <div className={`${isPart2 
+              ? 'border-l-4 border-blue-500 bg-gradient-to-r from-blue-50 to-blue-50 rounded-r-lg' 
+              : 'bg-white'} p-5 mb-6`}
             >
-              {isMuted ? <VolumeX className="h-4 w-4 mr-1" /> : <Volume2 className="h-4 w-4 mr-1" />}
-              {isMuted ? 'Unmute' : 'Mute'} Sounds
-            </Button>
+              <div className="prose max-w-none">
+                <div className="whitespace-pre-line text-gray-800 text-lg">{currentQuestion.question_text}</div>
+              </div>
+            </div>
             
-            <div className="flex gap-2">
+            {/* Audio recorder with enhanced styling */}
+            <div className="mt-8 bg-gray-50 rounded-xl p-5">
+              <SimpleAudioRecorder
+                key={`recorder-${currentQuestion.id}`}
+                questionId={currentQuestion.id}
+                duration={currentQuestion.speaking_time_seconds || 60}
+                onComplete={handleRecordingComplete}
+                onNavigateNext={handleNextQuestion}
+              />
+              
+              {/* Skip remaining time button with improved styling */}
               {!hasRecordedAudio && (
-                <Button
-                  variant="outline"
+                <div className="mt-6 flex justify-center">
+                  <button
+                    onClick={handleSkipRemainingTime}
+                    className="group flex items-center px-5 py-2.5 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white rounded-full shadow-sm transition-all duration-200 hover:shadow focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                  >
+                    <svg className="h-4 w-4 mr-2 transition-transform duration-200 group-hover:translate-x-0.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polygon points="5 4 15 12 5 20 5 4"></polygon>
+                      <line x1="19" y1="5" x2="19" y2="19"></line>
+                    </svg>
+                    Skip Remaining Time & Continue
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+          
+          {/* Action buttons */}
+          <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex flex-wrap justify-between gap-3">
+            <button
+              onClick={handleToggleMute}
+              className="flex items-center px-4 py-2 bg-white border border-gray-200 rounded-full text-gray-700 hover:bg-gray-50 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-gray-200 focus:ring-offset-2"
+            >
+              {isMuted ? (
+                <>
+                  <svg className="h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="1" y1="1" x2="23" y2="23"></line>
+                    <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"></path>
+                    <path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"></path>
+                    <line x1="12" y1="19" x2="12" y2="23"></line>
+                    <line x1="8" y1="23" x2="16" y2="23"></line>
+                  </svg>
+                  Unmute Sounds
+                </>
+              ) : (
+                <>
+                  <svg className="h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                    <line x1="12" y1="19" x2="12" y2="23"></line>
+                    <line x1="8" y1="23" x2="16" y2="23"></line>
+                  </svg>
+                  Mute Sounds
+                </>
+              )}
+            </button>
+            
+            <div className="flex gap-3">
+              {!hasRecordedAudio && (
+                <button
                   onClick={handleSkipQuestion}
-                  className="flex items-center text-amber-600 border-amber-300 hover:bg-amber-50"
+                  className="flex items-center px-4 py-2 bg-amber-50 border border-amber-200 rounded-full text-amber-700 hover:bg-amber-100 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-amber-300 focus:ring-offset-2"
                 >
-                  <SkipForward className="h-4 w-4 mr-1" />
-                  Skip Question Completely
-                </Button>
+                  <svg className="h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polygon points="5 4 15 12 5 20 5 4"></polygon>
+                    <line x1="19" y1="5" x2="19" y2="19"></line>
+                  </svg>
+                  Skip Question
+                </button>
               )}
               
               {hasRecordedAudio && (
-                <Button 
+                <button 
                   onClick={handleNextQuestion}
-                  className="flex items-center"
+                  className="group flex items-center px-5 py-2.5 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white rounded-full shadow-sm transition-all duration-200 hover:shadow focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
                 >
-                  {isLastQuestionInTest ? 'Finish Test' : 'Next Question'} →
-                </Button>
+                  <span>{isLastQuestionInTest ? 'Finish Test' : 'Next Question'}</span>
+                  <svg className="h-4 w-4 ml-2 transition-transform duration-200 group-hover:translate-x-0.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                    <polyline points="12 5 19 12 12 19"></polyline>
+                  </svg>
+                </button>
               )}
             </div>
           </div>
         </div>
         
         {hasRecordedAudio && isLastQuestionInTest && (
-          <div className="mt-4 text-center">
-            <Button 
-              size="lg"
+          <div className="mt-8 text-center">
+            <button 
               onClick={handleFinishTest}
-              className="px-8 py-6 h-auto text-lg"
+              className="group px-8 py-4 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white text-lg font-medium rounded-full shadow-sm transition-all duration-200 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
             >
-              Finish Test & Submit Responses
-            </Button>
+              <span className="flex items-center justify-center">
+                Finish Test & Submit Responses
+                <svg className="h-5 w-5 ml-2 transition-transform duration-200 group-hover:translate-x-0.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+              </span>
+            </button>
           </div>
         )}
       </main>
       
-      {/* Test Submission Dialog */}
+      {/* Test Submission Dialog with enhanced styling */}
       <Dialog open={isSubmitDialogOpen} onOpenChange={handleSubmitDialogCancel}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Submit Test Responses</DialogTitle>
-            <DialogDescription>
+        <DialogContent className="sm:max-w-md rounded-2xl p-0 overflow-hidden">
+          <div className="bg-gradient-to-r from-blue-500 to-indigo-600 p-6 text-white">
+            <h2 className="text-2xl font-semibold mb-2">Submit Test Responses</h2>
+            <p className="text-blue-100">
               You've completed all questions! Submit your responses to receive your IELTS band score and feedback.
-            </DialogDescription>
-          </DialogHeader>
-          
-          <div className="my-4">
-            <p className="text-sm text-gray-600 mb-4">
-              {isSubmitting ? (
-                <span className="flex items-center">
-                  <span className="animate-pulse mr-2">●</span>
-                  Processing your responses...
-                </span>
-              ) : (
-                "Once submitted, you'll get detailed feedback on your performance."
-              )}
             </p>
           </div>
           
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={handleSubmitDialogCancel}
-              disabled={isSubmitting}
-            >
-              Cancel
-            </Button>
-            <Button 
-              onClick={handleSubmitDialogConfirm}
-              disabled={isSubmitting}
-            >
-              {isSubmitting ? 'Submitting...' : 'Submit Responses'}
-            </Button>
-          </DialogFooter>
+          <div className="p-6">
+            {isSubmitting ? (
+              <div className="flex flex-col items-center justify-center py-6">
+                <div className="relative">
+                  <div className="w-16 h-16 rounded-full border-4 border-blue-100"></div>
+                  <div className="absolute top-0 left-0 w-16 h-16 rounded-full border-t-4 border-blue-500 animate-spin"></div>
+                </div>
+                <p className="mt-4 text-gray-600 font-medium">Processing your responses...</p>
+                <p className="text-sm text-gray-500 mt-2">This may take a few moments</p>
+              </div>
+            ) : (
+              <div className="py-2">
+                <div className="bg-blue-50 rounded-xl p-4 mb-6">
+                  <div className="flex">
+                    <div className="flex-shrink-0">
+                      <svg className="h-5 w-5 text-blue-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                      </svg>
+                    </div>
+                    <div className="ml-3">
+                      <p className="text-sm text-blue-700">
+                        Once submitted, you'll get detailed feedback on your performance across all IELTS speaking criteria.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="flex flex-col sm:flex-row-reverse gap-3 mt-6">
+                  <button 
+                    onClick={handleSubmitDialogConfirm}
+                    className="w-full sm:w-auto px-5 py-2.5 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-medium rounded-lg shadow-sm transition-all duration-200 hover:shadow focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                  >
+                    Submit Responses
+                  </button>
+                  <button
+                    onClick={handleSubmitDialogCancel}
+                    className="w-full sm:w-auto px-5 py-2.5 bg-white border border-gray-200 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-gray-200 focus:ring-offset-2"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
     </div>

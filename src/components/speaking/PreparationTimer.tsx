@@ -1,7 +1,4 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Progress } from '@/components/ui/progress';
-import { ClipboardList, SkipForward } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 
 interface PreparationTimerProps {
   initialSeconds: number;
@@ -16,6 +13,9 @@ const PreparationTimer: React.FC<PreparationTimerProps> = ({
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const startTimeRef = useRef<number>(Date.now());
   const callbackRef = useRef(onComplete); // Store the callback in a ref to avoid stale closures
+  
+  // Animation state
+  const [isAnimating, setIsAnimating] = useState(false);
   
   // Update the callback ref when onComplete changes
   useEffect(() => {
@@ -34,6 +34,9 @@ const PreparationTimer: React.FC<PreparationTimerProps> = ({
     console.log(`[PreparationTimer] Starting timer with ${initialSeconds} seconds`);
     setTimeRemaining(initialSeconds);
     startTimeRef.current = Date.now();
+    
+    // Start animation after a small delay
+    setTimeout(() => setIsAnimating(true), 100);
     
     intervalRef.current = setInterval(() => {
       const elapsedTimeMs = Date.now() - startTimeRef.current;
@@ -71,38 +74,78 @@ const PreparationTimer: React.FC<PreparationTimerProps> = ({
     callbackRef.current();
   };
   
+  // Calculate warning state
+  const isWarning = timeRemaining <= 10;
+  const strokeDasharray = 283; // 2 * PI * 45 (circle radius)
+  const strokeDashoffset = strokeDasharray * (1 - progressPercentage / 100);
+  
   return (
-    <div className="p-6 bg-amber-50 rounded-lg border border-amber-200 mb-6">
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <ClipboardList className="h-5 w-5 text-amber-600" />
-          <h3 className="font-medium text-amber-800">Preparation Time</h3>
+    <div className="flex flex-col items-center">
+      {/* Circular timer */}
+      <div className="relative w-48 h-48 mb-6">
+        {/* Background circle */}
+        <svg className="w-full h-full" viewBox="0 0 100 100">
+          <circle
+            className="text-gray-200"
+            strokeWidth="4"
+            stroke="currentColor"
+            fill="transparent"
+            r="45"
+            cx="50"
+            cy="50"
+          />
+          {/* Progress circle with animation */}
+          <circle
+            className={`${isWarning ? 'text-red-500' : 'text-indigo-500'} transition-colors duration-300`}
+            strokeWidth="4"
+            strokeDasharray={strokeDasharray}
+            strokeDashoffset={strokeDashoffset}
+            strokeLinecap="round"
+            stroke="currentColor"
+            fill="transparent"
+            r="45"
+            cx="50"
+            cy="50"
+            style={{
+              transition: isAnimating ? 'stroke-dashoffset 0.25s ease-in-out' : 'none'
+            }}
+          />
+        </svg>
+        
+        {/* Time display in the center */}
+        <div className="absolute inset-0 flex flex-col items-center justify-center">
+          <span className={`text-4xl font-bold ${isWarning ? 'text-red-600' : 'text-gray-800'} transition-colors duration-300`}>
+            {formatTime(timeRemaining)}
+          </span>
+          <span className="text-sm text-gray-500 mt-1">remaining</span>
         </div>
-        <Button 
-          onClick={handleSkip}
-          className="bg-amber-600 hover:bg-amber-700 text-white flex items-center gap-1"
-          size="sm"
-        >
-          <SkipForward size={16} />
-          <span>Skip Preparation</span>
-        </Button>
+        
+        {/* Pulse animation for warning state */}
+        {isWarning && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="w-full h-full rounded-full bg-red-500 opacity-0 animate-ping absolute"></div>
+          </div>
+        )}
       </div>
       
-      <div className="space-y-2">
-        <div className="flex justify-between text-sm">
-          <span className="font-medium text-amber-800">Time Remaining</span>
-          <span className="text-amber-900 font-mono">{formatTime(timeRemaining)}</span>
-        </div>
-        
-        <Progress
-          value={progressPercentage}
-          className="h-2 bg-amber-200"
-        />
-        
-        <p className="text-sm mt-4 text-amber-700">
-          Use this time to prepare your answer. Click "Skip Preparation" when ready.
+      {/* Instructions */}
+      <div className={`text-center mb-6 transition-opacity duration-300 ${isWarning ? 'opacity-60' : 'opacity-100'}`}>
+        <p className="text-gray-600 max-w-xs">
+          Use this time to prepare your answer. The timer will automatically end when it reaches zero.
         </p>
       </div>
+      
+      {/* Skip button */}
+      <button
+        onClick={handleSkip}
+        className="flex items-center gap-2 px-5 py-2.5 bg-white border border-gray-200 rounded-full text-gray-700 hover:bg-gray-50 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:ring-offset-2"
+      >
+        <svg className="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polygon points="5 4 15 12 5 20 5 4"></polygon>
+          <line x1="19" y1="5" x2="19" y2="19"></line>
+        </svg>
+        <span>I'm ready, start now</span>
+      </button>
     </div>
   );
 };
