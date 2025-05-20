@@ -7,10 +7,10 @@ import { clerkToSupabaseId } from '@/lib/clerkSupabaseAdapter'
 import fetch from 'node-fetch'
 
 // Configure Azure OpenAI client
-const endpoint = process.env.AZURE_OPENAI_ENDPOINT || ''
+const endpoint = process.env.AZURE_OPENAI_ENDPOINT || 'https://arnur-maw58kmn-swedencentral.cognitiveservices.azure.com'
 const apiVersion = process.env.AZURE_OPENAI_API_VERSION_WHISPER || '2024-06-01'
 const deployment = process.env.AZURE_OPENAI_DEPLOYMENT_WHISPER || 'whisper'
-const apiKey = process.env.AZURE_OPENAI_API_KEY || ''
+const apiKey = process.env.AZURE_OPENAI_API_KEY
 
 // Check if required environment variables are available
 if (!endpoint || !apiKey) {
@@ -39,48 +39,57 @@ const openai = new AzureOpenAI({
 })
 
 // Function to transcribe audio using Azure OpenAI Whisper
-async function transcribeAudio(audioData: ArrayBuffer | Buffer, filename: string): Promise<string> {
+async function transcribeAudio(audioData: ArrayBuffer | Buffer, filename: string, fileType: string): Promise<string> {
   try {
-    // For Azure OpenAI, we need to use a FormData with a file
-    const formData = new FormData()
-    const blob = new Blob([audioData], { type: 'audio/webm' })
-    const file = new File([blob], filename, { type: 'audio/webm' })
-    
     console.log(`[transcribeAudio] Preparing request to ${endpoint}/openai/deployments/${deployment}/audio/transcriptions`);
     console.log(`[transcribeAudio] File size: ${Math.round((audioData.byteLength || 0) / 1024)} KB`);
-    console.log(`[transcribeAudio] File type: audio/webm, name: ${filename}`);
+    console.log(`[transcribeAudio] File type: ${fileType}, name: ${filename}`);
     
-    // Add the file to FormData - use 'file' specifically as that's what the API expects
-    formData.append('file', file)
-    formData.append('model', 'whisper-1')
+    // Convert buffer to proper format
+    const fileBuffer = Buffer.isBuffer(audioData) ? audioData : Buffer.from(audioData);
     
-    // Create direct API call to Azure OpenAI
-    const apiUrl = `${endpoint}/openai/deployments/${deployment}/audio/transcriptions?api-version=${apiVersion}`
+    // Create multipart form data with proper boundary
+    const boundary = `----WebKitFormBoundary${Math.random().toString(16).substr(2)}`;
+    const body = createMultipartFormData(boundary, 'file', fileBuffer, filename, fileType);
     
-    console.log(`[transcribeAudio] Sending request to Azure OpenAI API: ${apiUrl}`);
+    // Note: We use the transcriptions endpoint, not translations
+    const apiUrl = `${endpoint}/openai/deployments/${deployment}/audio/transcriptions?api-version=${apiVersion}`;
+    console.log(`[transcribeAudio] Sending direct API request to: ${apiUrl}`);
     
     const response = await fetch(apiUrl, {
       method: 'POST',
       headers: {
-        'api-key': apiKey
+        'api-key': apiKey,
+        'Content-Type': `multipart/form-data; boundary=${boundary}`
       },
-      // @ts-ignore - FormData is valid for fetch but TypeScript is confused
-      body: formData
-    })
+      body
+    });
     
     if (!response.ok) {
-      const errorText = await response.text()
+      const errorText = await response.text();
       console.error(`[transcribeAudio] Azure OpenAI API error: ${response.status}`, errorText);
-      throw new Error(`Azure OpenAI API error: ${response.status} - ${errorText}`)
+      throw new Error(`Azure OpenAI API error: ${response.status} - ${errorText}`);
     }
     
-    const result = await response.json()
-    console.log(`[transcribeAudio] Successfully received transcript of length: ${result.text?.length || 0} chars`);
-    return result.text || ''
+    const result = await response.json();
+    console.log(`[transcribeAudio] Successfully received transcript, length: ${result.text?.length || 0} chars`);
+    return result.text || '';
   } catch (error) {
-    console.error('[transcribeAudio] Error:', error)
-    throw error
+    console.error('[transcribeAudio] Error:', error);
+    throw error;
   }
+}
+
+// Helper function to create multipart form data from a buffer
+function createMultipartFormData(boundary: string, fieldName: string, fileBuffer: Buffer, filename: string, contentType: string): Buffer {
+  const modelField = `--${boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\nwhisper-1\r\n`;
+  const fileHeader = `--${boundary}\r\nContent-Disposition: form-data; name="${fieldName}"; filename="${filename}"\r\nContent-Type: ${contentType}\r\n\r\n`;
+  const fileFooter = `\r\n--${boundary}--\r\n`;
+  
+  const headerBuffer = Buffer.from(modelField + fileHeader);
+  const footerBuffer = Buffer.from(fileFooter);
+  
+  return Buffer.concat([headerBuffer, fileBuffer, footerBuffer]);
 }
 
 // Helper to fetch remote audio
@@ -118,7 +127,9 @@ export async function POST(request: NextRequest) {
     // Try Supabase auth if Clerk failed
     if (!userId) {
       try {
-        const supabase = createRouteHandlerClient({ cookies })
+        // Create Supabase client with proper cookie handling
+        const supabase = createRouteHandlerClient({ cookies });
+        
         const { data: { user } } = await supabase.auth.getUser()
         if (user) {
           userId = user.id
@@ -162,7 +173,7 @@ export async function POST(request: NextRequest) {
           const buffer = Buffer.from(base64Data, 'base64')
           
           // Transcribe the audio
-          const text = await transcribeAudio(buffer, `audio-${Date.now()}.webm`)
+          const text = await transcribeAudio(buffer, `audio-${Date.now()}.webm`, 'audio/webm')
           
           return NextResponse.json({ text })
         } catch (error) {
@@ -182,7 +193,7 @@ export async function POST(request: NextRequest) {
           const audioBuffer = await fetchRemoteAudio(audioUrl)
           
           // Transcribe the audio
-          const text = await transcribeAudio(audioBuffer, `audio-${Date.now()}.webm`)
+          const text = await transcribeAudio(audioBuffer, `audio-${Date.now()}.webm`, 'audio/webm')
           
           return NextResponse.json({ text })
         } catch (error) {
@@ -226,7 +237,7 @@ export async function POST(request: NextRequest) {
         console.log(`[API:transcribe] Converted file to ArrayBuffer: ${Math.round(arrayBuffer.byteLength/1024)}KB`);
         
         // Transcribe the audio
-        const text = await transcribeAudio(arrayBuffer, file.name || `audio-${Date.now()}.webm`);
+        const text = await transcribeAudio(arrayBuffer, file.name || `audio-${Date.now()}`, file.type || 'audio/wav');
         console.log(`[API:transcribe] Successfully transcribed audio, text length: ${text.length} chars`);
         
         return NextResponse.json({ text });

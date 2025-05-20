@@ -1,27 +1,31 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs'
+import { createClient } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
-import { AzureOpenAI } from 'openai'
 import { auth } from '@clerk/nextjs/server'
 import { clerkToSupabaseId } from '@/lib/clerkSupabaseAdapter'
+import fetch from 'node-fetch'
 
 // Configure Azure OpenAI client
-const endpoint = process.env.AZURE_OPENAI_ENDPOINT || ''
-const apiVersion = process.env.AZURE_OPENAI_API_VERSION || '2024-06-01'
-const deployment = process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4'
-const apiKey = process.env.AZURE_OPENAI_API_KEY || ''
+const endpoint = process.env.AZURE_OPENAI_ENDPOINT || 'https://arnur-maw58kmn-swedencentral.cognitiveservices.azure.com'
+const apiVersion = process.env.AZURE_OPENAI_API_VERSION || '2025-01-01-preview'
+const deployment = process.env.AZURE_OPENAI_DEPLOYMENT
+const apiKey = process.env.AZURE_OPENAI_API_KEY
 
-// Initialize the Azure OpenAI client
-const openai = new AzureOpenAI({
+// Configure Supabase direct client
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
+
+// Log config for debugging
+console.log('[API:score] Azure OpenAI configuration:', {
+  endpoint: endpoint ? `${endpoint.substring(0, 15)}...` : 'Missing',
   apiVersion,
-  endpoint,
-  apiKey,
-  deployment
-})
+  deployment,
+  hasApiKey: !!apiKey
+});
 
 export async function POST(request: NextRequest) {
   try {
-    // Authentication - try both Clerk and Supabase
+    // Authentication - try both Clerk and direct Supabase
     let userId = null
     let supabase = null;
     
@@ -34,18 +38,6 @@ export async function POST(request: NextRequest) {
       }
     } catch (clerkError) {
       console.error('[API:score] Clerk auth error:', clerkError)
-    }
-    
-    // Try Supabase auth
-    try {
-      supabase = createRouteHandlerClient({ cookies })
-      const { data: { user } } = await supabase.auth.getUser()
-      if (user) {
-        userId = user.id
-        console.log(`[API:score] Authenticated via Supabase: ${userId.substring(0, 8)}...`)
-      }
-    } catch (supabaseError) {
-      console.error('[API:score] Supabase auth error:', supabaseError)
     }
     
     // Parse the request body
@@ -62,6 +54,15 @@ export async function POST(request: NextRequest) {
     if (!userId && clientUserId) {
       userId = clientUserId
       console.log(`[API:score] Using client-provided user ID: ${userId.substring(0, 8)}...`)
+    }
+    
+    // Create Supabase client using direct access key (no cookies needed)
+    // This should avoid the cookies warning entirely
+    if (supabaseUrl && supabaseServiceKey) {
+      supabase = createClient(supabaseUrl, supabaseServiceKey, {
+        auth: { persistSession: false }
+      });
+      console.log('[API:score] Created Supabase client with service role key');
     }
     
     // Validate required fields
@@ -177,25 +178,43 @@ Format your response as a JSON object with the following keys:
     console.log(`[API:score] Processing transcript for question ID: ${questionId ?? 'unknown'}`)
     
     try {
-      // Call OpenAI API for scoring
-      const completion = await openai.chat.completions.create({
-        model: 'gpt-4', // Will be replaced by deployment id in Azure
-        messages: [
-          {
-            role: 'system',
-            content: 'You are an IELTS Speaking examiner providing detailed feedback in JSON format.'
-          },
-          {
-            role: 'user',
-            content: scoringPrompt
-          }
-        ],
-        response_format: { type: 'json_object' }
-      })
-
-      // Parse the JSON response
-      const rawFeedback = completion.choices[0]?.message?.content || ''
-      console.log(`[API:score] Generated feedback: ${rawFeedback.substring(0, 50)}...`)
+      // Call Azure OpenAI API directly with fetch instead of using the SDK
+      // This gives us more control over the request and avoids the model name issues
+      console.log(`[API:score] Using Azure OpenAI with deployment: ${deployment}`);
+      
+      const apiUrl = `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=${apiVersion}`;
+      
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'api-key': apiKey
+        },
+        body: JSON.stringify({
+          messages: [
+            {
+              role: 'system',
+              content: 'You are an IELTS Speaking examiner providing detailed feedback in JSON format.'
+            },
+            {
+              role: 'user',
+              content: scoringPrompt
+            }
+          ],
+          response_format: { type: 'json_object' }
+        })
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[API:score] Azure OpenAI API error: ${response.status}`, errorText);
+        throw new Error(`Azure OpenAI API error (${response.status}): ${errorText.substring(0, 100)}`);
+      }
+      
+      const completionData = await response.json();
+      const rawFeedback = completionData.choices?.[0]?.message?.content || '';
+      
+      console.log(`[API:score] Generated feedback: ${rawFeedback.substring(0, 50)}...`);
       
       try {
         // Try to parse the JSON response
@@ -211,13 +230,14 @@ Format your response as a JSON object with the following keys:
               .from('user_responses')
               .select('id')
               .eq('user_id', userId)
-              .eq('question_id', questionId)
+              .eq('test_question_id', questionId)
               .maybeSingle()
             
             if (fetchError) {
               console.error('[API:score] Error fetching existing response:', fetchError)
             } else if (existingResponse) {
-              // Update existing response
+              // Update existing response - use type assertion to prevent "id" property error
+              const responseId = existingResponse.id;
               const { error: updateError } = await supabase
                 .from('user_responses')
                 .update({
@@ -226,7 +246,7 @@ Format your response as a JSON object with the following keys:
                   audio_url: audioUrl,
                   updated_at: new Date().toISOString()
                 })
-                .eq('id', existingResponse.id)
+                .eq('id', responseId)
               
               if (updateError) {
                 console.error('[API:score] Error updating response:', updateError)
@@ -237,7 +257,7 @@ Format your response as a JSON object with the following keys:
                 .from('user_responses')
                 .insert({
                   user_id: userId,
-                  question_id: questionId,
+                  test_question_id: questionId,
                   transcript,
                   feedback,
                   audio_url: audioUrl,

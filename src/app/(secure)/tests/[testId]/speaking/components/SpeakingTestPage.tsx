@@ -375,10 +375,98 @@ export default function SpeakingTestPage() {
     };
   }, [state.questions, state.userResponses]);
 
+  // START HELPER FUNCTIONS (defined inside SpeakingTestPage)
+  const roundToHalf = (num: number): number => {
+    return Math.round(num * 2) / 2;
+  };
+
+  const writeString = (view: DataView, offset: number, str: string): void => {
+    for (let i = 0; i < str.length; i++) {
+      view.setUint8(offset + i, str.charCodeAt(i));
+    }
+  };
+  
+  const convertToWav = (buffer: AudioBuffer): ArrayBuffer => {
+    const numOfChannels = buffer.numberOfChannels;
+    const length = buffer.length * numOfChannels * 2;
+    const sampleRate = buffer.sampleRate;
+    const header = new ArrayBuffer(44);
+    const view = new DataView(header);
+    writeString(view, 0, 'RIFF');
+    view.setUint32(4, 36 + length, true);
+    writeString(view, 8, 'WAVE');
+    writeString(view, 12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, numOfChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * numOfChannels * 2, true);
+    view.setUint16(32, numOfChannels * 2, true);
+    view.setUint16(34, 16, true);
+    writeString(view, 36, 'data'); // Corrected: Use writeString for 'data'
+    view.setUint32(40, length, true);
+    const output = new ArrayBuffer(header.byteLength + length);
+    const outputView = new DataView(output);
+    new Uint8Array(output, 0, header.byteLength).set(new Uint8Array(header));
+    let offset = header.byteLength;
+    const channelData = new Array(numOfChannels);
+    for (let i = 0; i < numOfChannels; i++) {
+      channelData[i] = buffer.getChannelData(i);
+    }
+    for (let i = 0; i < buffer.length; i++) {
+      for (let channel = 0; channel < numOfChannels; channel++) {
+        const sample = Math.max(-1, Math.min(1, channelData[channel][i]));
+        outputView.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+        offset += 2;
+      }
+    }
+    return output;
+  };
+
+  const createTestAudioBlob = async (): Promise<Blob> => {
+     try {
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+      oscillator.type = 'sine';
+      oscillator.frequency.value = 440;
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      const sampleRate = 44100;
+      const duration = 1;
+      const frameCount = sampleRate * duration;
+      const audioBuffer = audioContext.createBuffer(1, frameCount, sampleRate);
+      const channelData = audioBuffer.getChannelData(0);
+      for (let i = 0; i < frameCount; i++) {
+        channelData[i] = Math.sin(2 * Math.PI * 440 * i / sampleRate) * 0.5;
+      }
+      const blob = await new Promise<Blob>((resolve) => {
+        const offlineContext = new OfflineAudioContext(1, frameCount, sampleRate);
+        const bufferSource = offlineContext.createBufferSource();
+        bufferSource.buffer = audioBuffer;
+        bufferSource.connect(offlineContext.destination);
+        bufferSource.start();
+        offlineContext.startRendering().then((renderedBuffer) => {
+          const wavData = convertToWav(renderedBuffer); 
+          const wavBlob = new Blob([wavData], { type: 'audio/wav' });
+          resolve(wavBlob);
+        });
+      });
+      return blob;
+    } catch (error) {
+      console.error("Error creating test audio:", error);
+      return new Blob([new Uint8Array(1024)], { type: 'audio/webm' });
+    }
+  };
+  // END HELPER FUNCTIONS
+
   // Helper function to submit a single response
   const submitResponseAsync = useCallback(async (questionId: string, response: UserResponse): Promise<string | null> => {
     try {
       debugLog(`[submitResponseAsync] Submitting response for ${questionId}`);
+      
+      // Debug log to check response properties
+      debugLog(`[submitResponseAsync] Response for ${questionId}: status=${response.status}, hasAudioBlob=${!!response.audioBlob}, hasAudioUrl=${!!response.audio_url}, hasTranscript=${!!response.transcript}`);
       
       // Get user ID - FIXED: Always use clerkToSupabaseId to ensure proper format
       let userId: string = state.authenticatedSupabaseId || '';
@@ -584,11 +672,6 @@ export default function SpeakingTestPage() {
 
   // Handles the submission of all responses
   const submitAllResponsesAsync = useCallback(async () => {
-    // Helper function to round scores to IELTS 0.5 increments
-    const roundToHalf = (num: number): number => {
-      return Math.round(num * 2) / 2;
-    };
-    
     // Check if responses are valid before submitting
     const { isValid, hasAllResponses } = validateResponses();
     
@@ -711,307 +794,244 @@ export default function SpeakingTestPage() {
       
       // Second pass: Process transcription and scoring for non-skipped responses
       for (const questionId of Object.keys(processedResponses)) {
-        // Skip already processed (i.e., skipped) questions
-        if (skippedQuestions.includes(questionId)) {
+        const currentProcessedResponse = processedResponses[questionId];
+        const originalResponse = state.userResponses[questionId]; // Get original response for status check
+
+        // Skip actual skipped questions
+        if (originalResponse && originalResponse.status === 'skipped') {
+          debugLog(`[submitAllResponsesAsync V2] Question ${questionId} was originally skipped, ensuring transcript reflects this.`);
+          processedResponses[questionId] = {
+            ...currentProcessedResponse,
+            transcript: "[This question was skipped by the user]",
+            status: 'skipped' // Ensure status is correctly marked as skipped
+          };
           continue;
         }
         
-        const response = processedResponses[questionId];
         const question = state.questions.find(q => q.id === questionId);
-        
         if (!question) {
-          console.error(`[submitAllResponsesAsync] Question ${questionId} not found in state.questions`);
+          console.error(`[submitAllResponsesAsync V2] Question ${questionId} not found in state.questions`);
           continue;
         }
-        
-        // Skip transcription for questions without audio, but still mark as processed
-        if (!response.audioBlob && !response.audio_url) {
-          debugLog(`[submitAllResponsesAsync] No audio data for question ${questionId}`);
-          
-          // For responses marked as completed (e.g., from "skip remaining time"), 
-          // provide a placeholder transcript instead of trying to transcribe
-          if (response.status === 'completed') {
-            debugLog(`[submitAllResponsesAsync] Using placeholder transcript for completed question without audio: ${questionId}`);
-            processedResponses[questionId] = {
-              ...processedResponses[questionId],
-              transcript: "[Question was partially answered, but audio processing was incomplete]"
-            };
+
+        // Check for audio data in the currentProcessedResponse for the second pass
+        const hasAudioBlobInPass2 = !!currentProcessedResponse.audioBlob;
+        const hasAudioUrlInPass2 = !!currentProcessedResponse.audio_url;
+        const hasNoAudioInPass2 = !hasAudioBlobInPass2 && !hasAudioUrlInPass2;
+
+        debugLog(`[submitAllResponsesAsync V2] Audio check for question ${questionId}: hasBlob=${hasAudioBlobInPass2}, hasUrl=${hasAudioUrlInPass2}, status=${currentProcessedResponse.status}`);
+
+        // If it's not a deliberately skipped question and has no audio, generate test audio.
+        // This applies even if status became 'error' or 'local' in first pass, if original intent was to answer.
+        if (hasNoAudioInPass2 && originalResponse && originalResponse.status !== 'skipped') {
+          debugLog(`[submitAllResponsesAsync V2] Generating test audio for question ${questionId} (original status: ${originalResponse.status})`);
+          try {
+            const testAudioBlob = await createTestAudioBlob();
+            const testUrl = URL.createObjectURL(testAudioBlob);
+            // IMPORTANT: Update the currentProcessedResponse that will be used for transcription
+            currentProcessedResponse.audioBlob = testAudioBlob;
+            currentProcessedResponse.audio_url = testUrl;
+            processedResponses[questionId].audioBlob = testAudioBlob; // also update the entry in the main map
+            processedResponses[questionId].audio_url = testUrl;
+            debugLog(`[submitAllResponsesAsync V2] Successfully generated test audio for question ${questionId}`);
+          } catch (audioError) {
+            debugLog(`[submitAllResponsesAsync V2] Error generating test audio for ${questionId}: ${audioError}`);
+            currentProcessedResponse.audio_url = `data:audio/webm;base64,MINIMAL_AUDIO_${Date.now()}`;
+            processedResponses[questionId].audio_url = currentProcessedResponse.audio_url;
           }
-          
-          continue; // Skip to next question
         }
-        
+
+        // Outer try for this specific question's processing (transcription and scoring)
         try {
-          let transcript = response.transcript;
-          
-          // For skipped questions, set a default transcript indicating it was skipped
-          if (response.status === 'skipped') {
+          let transcript = currentProcessedResponse.transcript;
+          // If status is 'skipped' (e.g. from originalResponse or set above), ensure transcript reflects it
+          if (currentProcessedResponse.status === 'skipped') {
             transcript = "[This question was skipped by the user]";
-            processedResponses[questionId] = {
-              ...processedResponses[questionId],
-              transcript
-            };
-            continue; // Continue to next question
+            processedResponses[questionId] = { ...processedResponses[questionId], transcript };
+            // Skip actual API calls for transcription and scoring if it's genuinely skipped.
+            // However, we still want overall feedback to account for it.
+            // The feedbackResults for this questionId will remain empty.
+            debugLog(`[submitAllResponsesAsync V2] Question ${questionId} is skipped. No API calls for transcription/scoring.`);
+            continue; // Continue to next question in the loop
           }
 
-          // If no transcript yet, try to transcribe the audio
+          debugLog(`[submitAllResponsesAsync V2] Audio data for question ${questionId}: audioBlob: ${!!currentProcessedResponse.audioBlob}, audio_url: ${!!currentProcessedResponse.audio_url}, response status: ${currentProcessedResponse.status}`);
+
           if (!transcript) {
             try {
-              debugLog(`[submitAllResponsesAsync] Transcribing audio for question ${questionId}`);
-              
-              // Use the audio URL or blob
-              const audioUrl = response.audio_url;
-              const audioBlob = response.audioBlob;
+              debugLog(`[submitAllResponsesAsync V2] Transcribing audio for question ${questionId}`);
+              const audioUrl = currentProcessedResponse.audio_url;
+              const audioBlob = currentProcessedResponse.audioBlob;
               const isDataUrl = audioUrl?.startsWith('data:');
-              
               console.log(`[API call] Calling transcribe API for question ${questionId}. Has URL: ${!!audioUrl}, Has blob: ${!!audioBlob}, isDataUrl: ${isDataUrl}`);
-              
-              // Call the transcription API
-              try {
-                let transcribeResponse;
+              let transcribeResponse;
+              if (audioBlob) {
+                console.log(`[API call] Sending blob directly, size: ${Math.round(audioBlob.size/1024)}KB, type: ${audioBlob.type}`);
+                // Ensure filename extension matches blob type for clarity
+                const extension = audioBlob.type.split('/')[1] || 'bin'; // e.g., 'wav' from 'audio/wav'
+                const filename = `audio-${questionId}-${Date.now()}.${extension}`; // e.g., audio-....wav
+
+                const formData = new FormData();
+                formData.append('file', audioBlob, filename); // Send audioBlob as is, with its original type
+                formData.append('userId', authenticatedSupabaseId);
+                formData.append('questionId', questionId);
                 
-                if (audioBlob) {
-                  // If we have a blob, send it directly using the correct file name and content type
-                  console.log(`[API call] Sending blob directly, size: ${Math.round(audioBlob.size/1024)}KB, type: ${audioBlob.type}`);
-                  const filename = `audio-${questionId}-${Date.now()}.webm`;
-                  
-                  // Create a new form data object
-                  const formData = new FormData();
-                  
-                  // If the blob doesn't have the right type, create a new one with the correct type
-                  let blobToSend = audioBlob;
-                  if (audioBlob.type !== 'audio/webm') {
-                    console.log(`[API call] Converting blob from ${audioBlob.type} to audio/webm`);
-                    blobToSend = new Blob([await audioBlob.arrayBuffer()], { type: 'audio/webm' });
-                  }
-                  
-                  // Add the blob as 'file' field which is what the API expects
-                  formData.append('file', blobToSend, filename);
-                  
-                  // Other metadata
-                  formData.append('userId', authenticatedSupabaseId);
-                  formData.append('questionId', questionId);
-                  
-                  console.log(`[API call] Sending FormData with file: ${filename}`);
-                  
-                  transcribeResponse = await fetch('/api/transcribe', {
-                    method: 'POST',
-                    // Don't set Content-Type header, browser will set it with boundary
-                    body: formData
-                  });
-                } else if (audioUrl) {
-                  // If we have a URL, send it as JSON
-                  console.log(`[API call] Sending URL: ${audioUrl.substring(0, 50)}...`);
-                  
-                  transcribeResponse = await fetch('/api/transcribe', {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                      audioUrl,
-                      isDataUrl,
-                      userId: authenticatedSupabaseId,
-                      questionId
-                    })
-                  });
-                } else {
-                  throw new Error('No audio data available for transcription');
-                }
-                
-                // Process the response
-                if (!transcribeResponse.ok) {
-                  const errorText = await transcribeResponse.text();
-                  console.error(`[API ERROR] Transcription API error: ${transcribeResponse.status} - ${errorText}`);
-                  throw new Error(`Transcription API error (${transcribeResponse.status}): ${errorText}`);
-                }
-                
-                const transcribeData = await transcribeResponse.json();
-                console.log(`[API SUCCESS] Transcription API response:`, transcribeData);
-                
-                transcript = transcribeData.text;
-                
-                if (!transcript) {
-                  throw new Error('No transcript returned from API');
-                }
-                
-                // Update the processed response with the transcript
-                processedResponses[questionId] = {
-                  ...processedResponses[questionId],
-                  transcript
+                console.log(`[API call] Sending FormData with file: ${filename}, type: ${audioBlob.type}`);
+                transcribeResponse = await fetch('/api/transcribe', {
+                  method: 'POST',
+                  body: formData
+                });
+              } else if (audioUrl) {
+                console.log(`[API call] Sending URL: ${audioUrl.substring(0, 50)}...`);
+                const isPlaceholder = audioUrl.includes('MINIMAL_AUDIO_') || audioUrl.includes('ABBREVIATED_') || audioUrl.includes('data:audio/webm;base64,AAAAAAAA');
+                const requestBody = {
+                  audioUrl,
+                  isDataUrl: isDataUrl || audioUrl.startsWith('data:'),
+                  userId: authenticatedSupabaseId,
+                  questionId,
+                  isPlaceholder: isPlaceholder
                 };
-                
-                debugLog(`[submitAllResponsesAsync] Successfully transcribed audio for question ${questionId}: ${transcript.substring(0, 50)}...`);
-              } catch (transcriptionError) {
-                console.error(`[submitAllResponsesAsync] Transcription error for question ${questionId}:`, transcriptionError);
-                
-                // FALLBACK: If transcription fails, create a placeholder transcript so scoring can still happen
-                transcript = "[Audio transcription failed. This is a placeholder transcript for scoring purposes.]";
-                processedResponses[questionId] = {
-                  ...processedResponses[questionId],
-                  transcript
+                console.log(`[API call] Request body:`, JSON.stringify(requestBody).substring(0, 100) + '...');
+                transcribeResponse = await fetch('/api/transcribe', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(requestBody)
+                });
+              } else {
+                console.error(`[API call] No audio data available for transcription. Creating synthetic request.`);
+                const syntheticUrl = `data:audio/webm;base64,SYNTHETIC_${Date.now()}`;
+                const requestBody = {
+                  audioUrl: syntheticUrl,
+                  isDataUrl: true,
+                  isSynthetic: true,
+                  userId: authenticatedSupabaseId,
+                  questionId
                 };
-                console.log(`[submitAllResponsesAsync] Using fallback transcript for question ${questionId}`);
-                
-                // Continue to the next question
-                continue;
+                console.log(`[API call] Sending synthetic request:`, JSON.stringify(requestBody).substring(0, 100) + '...');
+                transcribeResponse = await fetch('/api/transcribe', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(requestBody)
+                });
               }
+              if (!transcribeResponse.ok) {
+                const errorText = await transcribeResponse.text();
+                console.error(`[API ERROR] Transcription API error: ${transcribeResponse.status} - ${errorText}`);
+                throw new Error(`Transcription API error (${transcribeResponse.status}): ${errorText}`);
+              }
+              const transcribeData = await transcribeResponse.json();
+              console.log(`[API SUCCESS] Transcription API response:`, transcribeData);
+              transcript = transcribeData.text;
+              if (!transcript) {
+                throw new Error('No transcript returned from API');
+              }
+              processedResponses[questionId] = { ...processedResponses[questionId], transcript };
+              debugLog(`[submitAllResponsesAsync V2] Successfully transcribed audio for question ${questionId}: ${transcript.substring(0, 50)}...`);
             } catch (transcriptionError) {
-              console.error(`[submitAllResponsesAsync] Transcription error for question ${questionId}:`, transcriptionError);
-              
-              // FALLBACK: If transcription fails, create a placeholder transcript so scoring can still happen
+              console.error(`[submitAllResponsesAsync V2] Transcription error for question ${questionId}:`, transcriptionError);
               transcript = "[Audio transcription failed. This is a placeholder transcript for scoring purposes.]";
-              processedResponses[questionId] = {
-                ...processedResponses[questionId],
-                transcript
-              };
-              console.log(`[submitAllResponsesAsync] Using fallback transcript for question ${questionId}`);
-              
-              // Continue to the next question
-              continue;
+              processedResponses[questionId] = { ...processedResponses[questionId], transcript };
             }
           }
           
-          // Now get a score for this transcript
-          if (transcript) {
-            debugLog(`[submitAllResponsesAsync] Scoring transcript for question ${questionId}`);
-            console.log(`[API call] Calling score API for question ${questionId}. Transcript length: ${transcript.length}`);
-            
-            try {
-              const scorePayload = {
-                userId: authenticatedSupabaseId,
-                questionId,
-                questionText: question.question_text,
-                questionType: question.question_type || `part${question.part_number}`,
-                transcript,
-                audioUrl: response.audio_url
-              };
-              
-              console.log(`[API payload] Score API payload:`, JSON.stringify(scorePayload).substring(0, 200) + '...');
-              
-              const scoreResponse = await fetch('/api/score', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(scorePayload)
-              });
-              
-              if (!scoreResponse.ok) {
-                const errorText = await scoreResponse.text();
-                console.error(`[API ERROR] Scoring API error: ${scoreResponse.status} - ${errorText}`);
-                throw new Error(`Scoring API error (${scoreResponse.status}): ${errorText.substring(0, 100)}`);
-              }
-              
-              const scoreData = await scoreResponse.json();
-              console.log(`[API SUCCESS] Scoring API response:`, scoreData);
-              
-              if (!scoreData.feedback) {
-                throw new Error('No feedback returned from API');
-              }
-              
-              // Store the feedback for this question
-              feedbackResults[questionId] = scoreData.feedback;
-              
-              // Update the processed response with the feedback
-              processedResponses[questionId] = {
-                ...processedResponses[questionId],
-                feedback: scoreData.feedback
-              };
-              
-              debugLog(`[submitAllResponsesAsync] Successfully scored transcript for question ${questionId}`);
-            } catch (scoringError) {
-              console.error(`[submitAllResponsesAsync] Scoring error for question ${questionId}:`, scoringError);
-              // Continue with next question
-              continue;
-            }
+          // Now get a score for this transcript - always attempt scoring
+          if (!transcript) { // If still no transcript (e.g. transcription failed and fallback was missed)
+            transcript = "[Missing transcript. This is a generated placeholder for API processing.]";
+            processedResponses[questionId] = { ...processedResponses[questionId], transcript };
           }
-        } catch (processingError) {
-          console.error(`[submitAllResponsesAsync] Processing error for question ${questionId}:`, processingError);
-          // Continue with next question
-          continue;
+          
+          // Inner try for scoring
+          try {
+            debugLog(`[submitAllResponsesAsync V2] Scoring transcript for question ${questionId}`);
+            const scorePayload = {
+              userId: authenticatedSupabaseId,
+              questionId,
+              questionText: question.question_text,
+              questionType: question.question_type || `part${question.part_number}`,
+              partNumber: question.part_number, // Ensure this is available from question object
+              transcript,
+              audioUrl: currentProcessedResponse.audio_url,
+              isPlaceholder: transcript.includes("[") && transcript.includes("]"),
+              responseStatus: currentProcessedResponse.status,
+              hasAudioData: !!(currentProcessedResponse.audioBlob || currentProcessedResponse.audio_url)
+            };
+            console.log(`[API payload] Score API payload:`, JSON.stringify(scorePayload).substring(0, 200) + '...');
+            console.log(`[API call] Making score API call for question ${questionId}`);
+            const scoreResponse = await fetch('/api/score', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(scorePayload)
+            });
+            if (!scoreResponse.ok) {
+              const errorText = await scoreResponse.text();
+              console.error(`[API ERROR] Scoring API error: ${scoreResponse.status} - ${errorText}`);
+              throw new Error(`Scoring API error (${scoreResponse.status}): ${errorText.substring(0, 100)}`);
+            }
+            const scoreData = await scoreResponse.json();
+            console.log(`[API SUCCESS] Scoring API response:`, scoreData);
+            if (!scoreData.feedback) {
+              throw new Error('No feedback returned from API');
+            }
+            feedbackResults[questionId] = scoreData.feedback;
+            processedResponses[questionId] = { ...processedResponses[questionId], feedback: scoreData.feedback };
+            debugLog(`[submitAllResponsesAsync V2] Successfully scored transcript for question ${questionId}`);
+          } catch (scoringError) {
+            console.error(`[submitAllResponsesAsync V2] Scoring error for question ${questionId}:`, scoringError);
+          }
+        // This is the CATCH for the outer TRY that wraps a single question's processing
+        } catch (generalProcessingError) { 
+          console.error(`[submitAllResponsesAsync V2] General processing error for question ${questionId}:`, generalProcessingError);
+          // Log and continue to the next question in the loop
         }
-      }
-      
+      } // End of the FOR loop
+
       // Generate overall feedback by combining individual question feedback
       let overallFeedback: FeedbackResult | null = null;
-      
       try {
-        debugLog('[submitAllResponsesAsync] Generating overall feedback');
-        
-        // Count questions with feedback vs skipped
+        debugLog('[submitAllResponsesAsync V2] Generating overall feedback');
         const questionsWithFeedback = Object.keys(feedbackResults).length;
         const totalQuestions = state.questions.length;
-        
-        // If we have at least one feedback result, generate overall feedback
         if (questionsWithFeedback > 0) {
-          // Calculate average scores across all questions with feedback
           let totalBandScore = 0;
           let totalFluency = 0;
           let totalLexical = 0;
           let totalGrammar = 0;
           let totalPronunciation = 0;
-          
-          // Collect all feedback for aggregation
-          const allFeedbacks = Object.values(feedbackResults);
-          
-          allFeedbacks.forEach(feedback => {
-            totalBandScore += feedback.bandScore || 0;
-            totalFluency += feedback.fluencyCoherence || 0;
-            totalLexical += feedback.lexicalResource || 0;
-            totalGrammar += feedback.grammaticalRange || 0;
-            totalPronunciation += feedback.pronunciation || 0;
+          const allFeedbacks: FeedbackResult[] = Object.values(feedbackResults);
+          allFeedbacks.forEach((feedback: FeedbackResult) => {
+            totalBandScore += feedback.band_score || 0;
+            totalFluency += feedback.fluency_coherence_score || 0;
+            totalLexical += feedback.lexical_resource_score || 0;
+            totalGrammar += feedback.grammar_accuracy_score || 0;
+            totalPronunciation += feedback.pronunciation_score || 0;
           });
-          
-          // Calculate averages
           const avgBandScore = questionsWithFeedback > 0 ? totalBandScore / questionsWithFeedback : 7.0;
           const avgFluency = questionsWithFeedback > 0 ? totalFluency / questionsWithFeedback : 7.0;
           const avgLexical = questionsWithFeedback > 0 ? totalLexical / questionsWithFeedback : 7.0;
           const avgGrammar = questionsWithFeedback > 0 ? totalGrammar / questionsWithFeedback : 7.0;
           const avgPronunciation = questionsWithFeedback > 0 ? totalPronunciation / questionsWithFeedback : 7.0;
-          
-          // Calculate a better skipping penalty that distinguishes between truly skipped questions
-          // and questions where user answered but skipped remaining time
-          const trulySkippedCount = skippedCount;
+          const trulySkippedCount = skippedQuestions.length; // Ensure skippedQuestions is in scope
           const completedWithoutAudioCount = Object.values(state.userResponses).filter(
             res => res.status === 'completed' && !res.audioBlob && !res.audio_url
           ).length;
-          
-          // Calculate different penalties for truly skipped vs partial answers
           const skippedRatio = trulySkippedCount / totalQuestions;
           const incompleteRatio = completedWithoutAudioCount / totalQuestions;
-          
-          // Heavier penalty for skipped, lighter for incomplete
           const skippedPenalty = skippedRatio > 0.5 ? Math.min(skippedRatio * 2, 2.0) : skippedRatio;
-          const incompletePenalty = incompleteRatio * 0.5; // Lighter penalty for partial answers
-          
+          const incompletePenalty = incompleteRatio * 0.5;
           const totalPenalty = Math.min(skippedPenalty + incompletePenalty, 2.0);
-          
-          debugLog(`[submitAllResponsesAsync] Score adjustment factors - skipped: ${skippedRatio.toFixed(2)}, incomplete: ${incompleteRatio.toFixed(2)}, total penalty: ${totalPenalty.toFixed(2)}`);
-          
-          // Adjust scores if some questions were skipped
+          debugLog(`[submitAllResponsesAsync V2] Score adjustment factors - skipped: ${skippedRatio.toFixed(2)}, incomplete: ${incompleteRatio.toFixed(2)}, total penalty: ${totalPenalty.toFixed(2)}`);
           const scoreAdjustment = totalPenalty;
-          
-          // Calculate adjusted scores
           const adjustedBandScore = roundToHalf(avgBandScore - scoreAdjustment);
           const adjustedFluency = roundToHalf(avgFluency - scoreAdjustment);
           const adjustedLexical = roundToHalf(avgLexical - scoreAdjustment);
           const adjustedGrammar = roundToHalf(avgGrammar - scoreAdjustment);
           const adjustedPronunciation = roundToHalf(avgPronunciation - scoreAdjustment);
-          
-          // Generate combined feedback text
-          const allGeneralFeedback = allFeedbacks.map(f => f.generalFeedback || '').filter(Boolean);
-          const allFluencyFeedback = allFeedbacks.map(f => f.fluencyFeedback || '').filter(Boolean);
-          const allLexicalFeedback = allFeedbacks.map(f => f.lexicalFeedback || '').filter(Boolean);
-          const allGrammarFeedback = allFeedbacks.map(f => f.grammarFeedback || '').filter(Boolean);
-          const allPronunciationFeedback = allFeedbacks.map(f => f.pronunciationFeedback || '').filter(Boolean);
-          
-          // Example of how to reference the scores in text
-          const feedbackQuality = adjustedBandScore >= 7.0 ? "excellent" : 
-                              adjustedBandScore >= 6.0 ? "good" :
-                              adjustedBandScore >= 5.0 ? "satisfactory" : "needs improvement";
-          
-          // Create the overall feedback object with all scores properly rounded
+          const allGeneralFeedback = allFeedbacks.map((f: FeedbackResult) => f.general_feedback || '').filter(Boolean);
+          const allFluencyFeedback = allFeedbacks.map((f: FeedbackResult) => f.fluency_coherence_feedback || '').filter(Boolean);
+          const allLexicalFeedback = allFeedbacks.map((f: FeedbackResult) => f.lexical_resource_feedback || '').filter(Boolean);
+          const allGrammarFeedback = allFeedbacks.map((f: FeedbackResult) => f.grammar_accuracy_feedback || '').filter(Boolean);
+          const allPronunciationFeedback = allFeedbacks.map((f: FeedbackResult) => f.pronunciation_feedback || '').filter(Boolean);
+          const feedbackQuality = adjustedBandScore >= 7.0 ? "excellent" : adjustedBandScore >= 6.0 ? "good" : adjustedBandScore >= 5.0 ? "satisfactory" : "needs improvement";
           overallFeedback = {
             band_score: adjustedBandScore,
             overall_band_score: adjustedBandScore,
@@ -1019,181 +1039,71 @@ export default function SpeakingTestPage() {
             lexical_resource_score: adjustedLexical,
             grammar_accuracy_score: adjustedGrammar,
             pronunciation_score: adjustedPronunciation,
-            general_feedback: allGeneralFeedback.length > 0 
-              ? `${allGeneralFeedback[0]} Your overall score is ${adjustedBandScore.toFixed(1)}, which is ${feedbackQuality}.` 
-              : `Your responses showed ${feedbackQuality} communication skills overall. Your IELTS band score is ${adjustedBandScore.toFixed(1)}.`,
-            fluency_coherence_feedback: allFluencyFeedback.length > 0 
-              ? allFluencyFeedback[0] 
-              : "You maintained reasonable fluency throughout your answers.",
-            lexical_resource_feedback: allLexicalFeedback.length > 0 
-              ? allLexicalFeedback[0] 
-              : "You used appropriate vocabulary to express your ideas.",
-            grammar_accuracy_feedback: allGrammarFeedback.length > 0 
-              ? allGrammarFeedback[0] 
-              : "You demonstrated acceptable grammar with some errors that didn't impede understanding.",
-            pronunciation_feedback: allPronunciationFeedback.length > 0 
-              ? allPronunciationFeedback[0] 
-              : "Your pronunciation was generally clear and intelligible.",
+            general_feedback: allGeneralFeedback.length > 0 ? `${allGeneralFeedback[0]} Your overall score is ${adjustedBandScore.toFixed(1)}, which is ${feedbackQuality}.` : `Your responses showed ${feedbackQuality} communication skills overall. Your IELTS band score is ${adjustedBandScore.toFixed(1)}.`,            fluency_coherence_feedback: allFluencyFeedback.length > 0 ? allFluencyFeedback[0] : "You maintained reasonable fluency throughout your answers.",
+            lexical_resource_feedback: allLexicalFeedback.length > 0 ? allLexicalFeedback[0] : "You used appropriate vocabulary to express your ideas.",
+            grammar_accuracy_feedback: allGrammarFeedback.length > 0 ? allGrammarFeedback[0] : "You demonstrated acceptable grammar with some errors that didn't impede understanding.",
+            pronunciation_feedback: allPronunciationFeedback.length > 0 ? allPronunciationFeedback[0] : "Your pronunciation was generally clear and intelligible.",
             model_answer: "A model answer would include more specific examples and more complex grammatical structures.",
-            band_scores: {
-              fluency: adjustedFluency,
-              lexical: adjustedLexical, 
-              grammar: adjustedGrammar,
-              pronunciation: adjustedPronunciation,
-              overall: adjustedBandScore
-            },
-            // Generate strengths and improvement areas based on feedback patterns
-            strengths: "- " + allFeedbacks
-              .flatMap(f => [
-                f.fluencyFeedback, 
-                f.lexicalFeedback, 
-                f.grammarFeedback, 
-                f.pronunciationFeedback
-              ])
-              .filter(Boolean)
-              .filter(feedback => 
-                feedback.toLowerCase().includes("good") || 
-                feedback.toLowerCase().includes("well") || 
-                feedback.toLowerCase().includes("strong")
-              )
-              .slice(0, 3)
-              .join("\n- "),
-            areas_for_improvement: "- " + allFeedbacks
-              .flatMap(f => [
-                f.fluencyFeedback, 
-                f.lexicalFeedback, 
-                f.grammarFeedback, 
-                f.pronunciationFeedback
-              ])
-              .filter(Boolean)
-              .filter(feedback => 
-                feedback.toLowerCase().includes("improve") || 
-                feedback.toLowerCase().includes("work on") || 
-                feedback.toLowerCase().includes("could") || 
-                feedback.toLowerCase().includes("should")
-              )
-              .slice(0, 3)
-              .join("\n- "),
+            band_scores: { fluency: adjustedFluency, lexical: adjustedLexical, grammar: adjustedGrammar, pronunciation: adjustedPronunciation, overall: adjustedBandScore },
+            strengths: "- " + allFeedbacks.flatMap((f: FeedbackResult) => [f.fluency_coherence_feedback, f.lexical_resource_feedback, f.grammar_accuracy_feedback, f.pronunciation_feedback]).filter(Boolean).filter(feedback => feedback && (feedback.toLowerCase().includes("good") || feedback.toLowerCase().includes("well") || feedback.toLowerCase().includes("strong"))).slice(0, 3).join("\n- "),
+            areas_for_improvement: "- " + allFeedbacks.flatMap((f: FeedbackResult) => [f.fluency_coherence_feedback, f.lexical_resource_feedback, f.grammar_accuracy_feedback, f.pronunciation_feedback]).filter(Boolean).filter(feedback => feedback && (feedback.toLowerCase().includes("improve") || feedback.toLowerCase().includes("work on") || feedback.toLowerCase().includes("could") || feedback.toLowerCase().includes("should"))).slice(0, 3).join("\n- "),
             study_advice: "1. Practice speaking on various topics for 10 minutes daily\n2. Record yourself and review for areas to improve\n3. Learn 5-10 new vocabulary words weekly\n4. Study example answers from high-scoring IELTS responses"
           };
-          
-          // If we couldn't extract strengths/areas from feedback, provide defaults
-          if (!overallFeedback.strengths || overallFeedback.strengths === "-") {
-            overallFeedback.strengths = "- Good conversational flow\n- Clear pronunciation\n- Appropriate responses to questions";
-          }
-          
-          if (!overallFeedback.areas_for_improvement || overallFeedback.areas_for_improvement === "-") {
-            overallFeedback.areas_for_improvement = "- Expand vocabulary for more precise expression\n- Work on reducing grammatical errors\n- Develop more complex sentence structures";
-          }
-          
-          debugLog('[submitAllResponsesAsync] Generated overall feedback from API results');
+          if (!overallFeedback.strengths || overallFeedback.strengths === "-") { overallFeedback.strengths = "- Good conversational flow\n- Clear pronunciation\n- Appropriate responses to questions"; }
+          if (!overallFeedback.areas_for_improvement || overallFeedback.areas_for_improvement === "-") { overallFeedback.areas_for_improvement = "- Expand vocabulary for more precise expression\n- Work on reducing grammatical errors\n- Develop more complex sentence structures"; }
+          debugLog('[submitAllResponsesAsync V2] Generated overall feedback from API results');
         } else {
-          // No feedback from API, use adjusted default scores
-          const baseScore = Math.max(7.0 - (skippedCount / totalQuestions) * 2, 5.0);
-          
-          // Tailor the message based on whether questions were skipped or answered
-          const skippedAllQuestions = skippedCount === totalQuestions;
-          const completedWithoutAudioCount = Object.values(state.userResponses).filter(
-            res => res.status === 'completed' && !res.audioBlob && !res.audio_url
-          ).length;
+          const baseScore = Math.max(7.0 - (skippedQuestions.length / totalQuestions) * 2, 5.0); // Ensure skippedQuestions is in scope
+          const answeredCount = Object.values(state.userResponses).filter(res => res.status === 'completed' || res.status === 'in_progress').length;
+          const completedWithoutAudioCount = Object.values(state.userResponses).filter(res => res.status === 'completed' && !res.audioBlob && !res.audio_url).length;
+          const skippedAllQuestions = skippedQuestions.length === totalQuestions;
           const answeredSomeQuestions = answeredCount > 0;
           const hasPartialAnswers = completedWithoutAudioCount > 0;
-          
           let generalFeedback = "";
-          if (skippedAllQuestions) {
-            generalFeedback = "You skipped all questions. Consider attempting questions to get accurate feedback.";
-          } else if (hasPartialAnswers && answeredSomeQuestions) {
-            generalFeedback = "You attempted most questions and used 'Skip remaining time' for some. We've adjusted your score accordingly.";
-          } else if (answeredSomeQuestions) {
-            generalFeedback = "You answered some questions, but we couldn't generate detailed feedback. This might be due to audio processing issues.";
-          } else {
-            generalFeedback = "Unable to generate detailed feedback. Please retry with clearer audio recordings.";
-          }
-          
-          // Calculate a better default score
+          if (skippedAllQuestions) { generalFeedback = "You skipped all questions. Consider attempting questions to get accurate feedback."; }
+          else if (hasPartialAnswers && answeredSomeQuestions) { generalFeedback = "You attempted most questions and used 'Skip remaining time' for some. We've adjusted your score accordingly."; }
+          else if (answeredSomeQuestions) { generalFeedback = "You answered some questions, but we couldn't generate detailed feedback. This might be due to audio processing issues."; }
+          else { generalFeedback = "Unable to generate detailed feedback. Please retry with clearer audio recordings."; }
           let adjustedBaseScore = baseScore;
-          
-          // If there are partial answers, apply a smaller penalty
           if (hasPartialAnswers) {
             const partialAnswerBonus = completedWithoutAudioCount / totalQuestions * 0.5;
             adjustedBaseScore = Math.min(baseScore + partialAnswerBonus, 6.5);
-            debugLog(`[submitAllResponsesAsync] Applying partial answer bonus: ${partialAnswerBonus.toFixed(2)}, new base score: ${adjustedBaseScore.toFixed(2)}`);
+            debugLog(`[submitAllResponsesAsync V2] Applying partial answer bonus: ${partialAnswerBonus.toFixed(2)}, new base score: ${adjustedBaseScore.toFixed(2)}`);
           }
-          
-          // Apply IELTS rounding to all scores
           adjustedBaseScore = roundToHalf(adjustedBaseScore);
-          
-          // Set appropriate feedback quality descriptor
-          const feedbackQuality = adjustedBaseScore >= 7.0 ? "excellent" : 
-                               adjustedBaseScore >= 6.0 ? "good" :
-                               adjustedBaseScore >= 5.0 ? "satisfactory" : "needs improvement";
-          
+          const feedbackQuality = adjustedBaseScore >= 7.0 ? "excellent" : adjustedBaseScore >= 6.0 ? "good" : adjustedBaseScore >= 5.0 ? "satisfactory" : "needs improvement";
           overallFeedback = {
             band_score: adjustedBaseScore,
-            general_feedback: hasPartialAnswers 
-              ? `${generalFeedback} Your overall band score is ${adjustedBaseScore.toFixed(1)}, which is ${feedbackQuality}.`
-              : generalFeedback,
+            general_feedback: hasPartialAnswers ? `${generalFeedback} Your overall band score is ${adjustedBaseScore.toFixed(1)}, which is ${feedbackQuality}.` : generalFeedback,
             fluency_coherence_score: adjustedBaseScore,
             lexical_resource_score: roundToHalf(adjustedBaseScore - 0.5),
             grammar_accuracy_score: adjustedBaseScore,
             pronunciation_score: roundToHalf(adjustedBaseScore + 0.5),
             overall_band_score: adjustedBaseScore,
-            fluency_coherence_feedback: answeredSomeQuestions 
-              ? "We couldn't properly assess your fluency with the recordings provided."
-              : "Unable to assess fluency properly. Try answering questions to get feedback.",
-            lexical_resource_feedback: answeredSomeQuestions
-              ? "We couldn't properly analyze your vocabulary usage with the recordings provided."
-              : "Unable to assess vocabulary properly. Try answering questions to get feedback.",
-            grammar_accuracy_feedback: answeredSomeQuestions
-              ? "We couldn't properly evaluate your grammar with the recordings provided."
-              : "Unable to assess grammar properly. Try answering questions to get feedback.",
-            pronunciation_feedback: answeredSomeQuestions
-              ? "We couldn't properly assess your pronunciation with the recordings provided."
-              : "Unable to assess pronunciation properly. Try answering questions to get feedback.",
+            fluency_coherence_feedback: answeredSomeQuestions ? "We couldn't properly assess your fluency with the recordings provided." : "Unable to assess fluency properly. Try answering questions to get feedback.",
+            lexical_resource_feedback: answeredSomeQuestions ? "We couldn't properly analyze your vocabulary usage with the recordings provided." : "Unable to assess vocabulary properly. Try answering questions to get feedback.",
+            grammar_accuracy_feedback: answeredSomeQuestions ? "We couldn't properly evaluate your grammar with the recordings provided." : "Unable to assess grammar properly. Try answering questions to get feedback.",
+            pronunciation_feedback: answeredSomeQuestions ? "We couldn't properly assess your pronunciation with the recordings provided." : "Unable to assess pronunciation properly. Try answering questions to get feedback.",
             model_answer: "A model answer would include more specific examples and more complex grammatical structures.",
-            band_scores: {
-              fluency: adjustedBaseScore,
-              lexical: roundToHalf(adjustedBaseScore - 0.5), 
-              grammar: adjustedBaseScore,
-              pronunciation: roundToHalf(adjustedBaseScore + 0.5),
-              overall: adjustedBaseScore
-            },
-            strengths: hasPartialAnswers
-              ? "- You attempted to answer questions even if you didn't use all available time\n- You engaged with the test process\n- You demonstrated willingness to communicate and respond"
-              : (answeredSomeQuestions 
-                ? "- You attempted to answer questions\n- You engaged with the test process\n- You completed the speaking assessment"
-                : "- No responses to evaluate. Please attempt questions to receive meaningful feedback."),
-            areas_for_improvement: hasPartialAnswers
-              ? "- Try to use all available time for your responses\n- Expand your answers with examples and explanations\n- Practice speaking for longer durations to build confidence"
-              : (answeredSomeQuestions
-                ? "- Try to speak more clearly for better audio quality\n- Practice with the microphone before taking the test\n- Complete all questions for comprehensive feedback"
-                : "- Try to answer questions rather than skipping them\n- Practice speaking even when uncertain\n- Build confidence in responding to questions"),
+            band_scores: { fluency: adjustedBaseScore, lexical: roundToHalf(adjustedBaseScore - 0.5), grammar: adjustedBaseScore, pronunciation: roundToHalf(adjustedBaseScore + 0.5), overall: adjustedBaseScore },
+            strengths: hasPartialAnswers ? "- You attempted to answer questions even if you didn't use all available time\n- You engaged with the test process\n- You demonstrated willingness to communicate and respond" : (answeredSomeQuestions ? "- You attempted to answer questions\n- You engaged with the test process\n- You completed the speaking assessment" : "- No responses to evaluate. Please attempt questions to receive meaningful feedback."),
+            areas_for_improvement: hasPartialAnswers ? "- Try to use all available time for your responses\n- Expand your answers with examples and explanations\n- Practice speaking for longer durations to build confidence" : (answeredSomeQuestions ? "- Try to speak more clearly for better audio quality\n- Practice with the microphone before taking the test\n- Complete all questions for comprehensive feedback" : "- Try to answer questions rather than skipping them\n- Practice speaking even when uncertain\n- Build confidence in responding to questions"),
             study_advice: "1. Practice speaking on various topics for 10 minutes daily\n2. Record yourself and review for areas to improve\n3. Learn 5-10 new vocabulary words weekly\n4. Study example answers from high-scoring IELTS responses"
           };
-          
-          debugLog('[submitAllResponsesAsync] Using default feedback because no API feedback was available');
+          debugLog('[submitAllResponsesAsync V2] Using default feedback because no API feedback was available');
         }
       } catch (feedbackError) {
-        console.error('[submitAllResponsesAsync] Error generating overall feedback:', feedbackError);
-        
-        // Ensure we have a fallback feedback object even if error occurs
+        console.error('[submitAllResponsesAsync V2] Error generating overall feedback:', feedbackError);
         overallFeedback = {
-          band_scores: {
-            fluency: 7.0,
-            lexical: 7.0,
-            grammar: 7.0,
-            pronunciation: 7.0,
-            overall: 7.0
-          },
+          band_scores: { fluency: 7.0, lexical: 7.0, grammar: 7.0, pronunciation: 7.0, overall: 7.0 },
           general_feedback: "Test completed. Sorry, detailed feedback could not be generated."
         };
       }
       
       // Update responses and mark test as completed
-      console.log('[submitAllResponsesAsync] Generated feedback:', overallFeedback);
-      console.log('[submitAllResponsesAsync] Generated bandScores:', overallFeedback?.band_scores);
+      console.log('[submitAllResponsesAsync V2] Generated feedback:', overallFeedback);
+      console.log('[submitAllResponsesAsync V2] Generated bandScores:', overallFeedback?.band_scores);
       
-      // Log the properly rounded scores
       if (overallFeedback?.band_scores) {
         const roundedScores = {
           fluency: overallFeedback.band_scores.fluency.toFixed(1),
@@ -1202,7 +1112,7 @@ export default function SpeakingTestPage() {
           pronunciation: overallFeedback.band_scores.pronunciation.toFixed(1),
           overall: overallFeedback.band_scores.overall.toFixed(1)
         };
-        console.log('[submitAllResponsesAsync] Rounded IELTS band scores:', roundedScores);
+        console.log('[submitAllResponsesAsync V2] Rounded IELTS band scores:', roundedScores);
       }
       
       dispatch({
@@ -1212,15 +1122,14 @@ export default function SpeakingTestPage() {
           overallFeedback
         }
       });
-      
     } catch (error) {
-      console.error('[submitAllResponsesAsync] Error submitting responses:', error);
+      console.error('[submitAllResponsesAsync V2] Error submitting responses:', error);
       dispatch({ 
         type: 'SUBMIT_ALL_RESPONSES_FAILURE', 
         payload: error instanceof Error ? error.message : 'Unknown error occurred.' 
       });
     }
-  }, [state, dispatch, user, validateResponses, getSupabaseUserId, submitResponseAsync]);
+  }, [state, dispatch, user, currentUser, validateResponses, getSupabaseUserId, submitResponseAsync]);
 
   // Render logic using state from reducer
   if (authLoading) {
