@@ -1,7 +1,7 @@
 'use client'
 
-import SpeakingTestPage from './components/SpeakingTestPage'
+import SpeakingTestContainer from './components/SpeakingTestContainer'
 
 export default function Page() {
-  return <SpeakingTestPage />
+  return <SpeakingTestContainer />
 } 

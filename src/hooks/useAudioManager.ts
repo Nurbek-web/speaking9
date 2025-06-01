@@ -1,329 +1,291 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 
-// A global store for audio recordings to prevent duplicates
-const globalAudioStore: {
-  recordings: Record<string, {
-    blob: Blob;
-    url: string; 
-    timestamp: number;
-    processed: boolean;
-  }>;
-  activeRecordings: Set<string>; // Track which recordings are currently in progress
-} = {
-  recordings: {},
-  activeRecordings: new Set()
-};
+// For type safety, define interfaces
+interface AudioManagerConfig {
+  onRecordingComplete?: (id: string, blob: Blob, url: string) => void;
+  onRecordingError?: (errorMsg: string) => void;
+}
 
-// Type definitions
 interface AudioRecording {
   blob: Blob;
   url: string;
-  timestamp: number;
 }
 
-type AudioManagerState = {
-  currentQuestionId: string | null;
-  isRecording: boolean;
-  recordingUrl: string | null;
-  recordingBlob: Blob | null;
-  audioDuration: number | null;
-  error: string | null;
-};
-
-/**
- * Custom hook for managing audio recordings globally
- * This approach completely bypasses the React component flow
- * to prevent duplicate recordings
- */
-export function useAudioManager(
-  options: {
-    onRecordingComplete?: (id: string, blob: Blob, url: string) => void;
-    onRecordingError?: (error: string) => void;
-  } = {}
-) {
-  const { onRecordingComplete, onRecordingError } = options;
-  
-  const [state, setState] = useState<AudioManagerState>({
-    currentQuestionId: null,
-    isRecording: false,
-    recordingUrl: null,
-    recordingBlob: null,
-    audioDuration: null,
-    error: null
-  });
-
-  // Flag to track component mount state
-  const isMountedRef = useRef<boolean>(true);
-  
-  // Clean up on unmount
-  useEffect(() => {
-    return () => {
-      isMountedRef.current = false;
+// Global storage for recordings
+declare global {
+  interface Window {
+    globalAudioStore?: {
+      recordings: Record<string, AudioRecording>;
     };
-  }, []);
+  }
+}
 
-  // Record audio for a specific question ID
-  const recordAudio = useCallback(async (questionId: string, durationSeconds: number = 60) => {
+const useAudioManager = (config: AudioManagerConfig = {}) => {
+  const { onRecordingComplete, onRecordingError } = config;
+  
+  // State for recording status
+  const [isRecording, setIsRecording] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [recordingBlob, setRecordingBlob] = useState<Blob | null>(null);
+  const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
+  
+  // References to keep track of recording session
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingIdRef = useRef<string | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  
+  // Create global store for recordings if it doesn't exist
+  if (typeof window !== 'undefined' && !window.globalAudioStore) {
+    window.globalAudioStore = { recordings: {} };
+  }
+  
+  // Initialize MediaRecorder with the best available options
+  const setupMediaRecorder = useCallback(async (): Promise<MediaRecorder> => {
     try {
-      // First check if recording is already in progress for this question
-      if (globalAudioStore.activeRecordings.has(questionId)) {
-        console.log(`[AudioManager] Recording already in progress for ${questionId} - skipping duplicate request`);
-        return;
+      console.log('[AudioManager] Setting up MediaRecorder');
+      
+      // Check if MediaRecorder is available
+      if (typeof MediaRecorder === 'undefined') {
+        throw new Error('MediaRecorder is not supported in this browser');
       }
-
-      // Check if a recording already exists for this question
-      if (globalAudioStore.recordings[questionId]) {
-        console.log(`[AudioManager] Recording already exists for ${questionId} - reusing`);
-        
-        const existing = globalAudioStore.recordings[questionId];
-        setState(prev => ({
-          ...prev,
-          currentQuestionId: questionId,
-          recordingUrl: existing.url,
-          recordingBlob: existing.blob,
-          isRecording: false,
-          audioDuration: estimateDuration(existing.blob)
-        }));
-        
-        // If not processed yet, notify listeners
-        if (!existing.processed && onRecordingComplete && isMountedRef.current) {
-          globalAudioStore.recordings[questionId].processed = true;
-          onRecordingComplete(questionId, existing.blob, existing.url);
+      
+      // Get audio stream with best quality
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { 
+          // Try to get highest quality audio
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: 44100,
+          channelCount: 1
         }
-        
-        return;
-      }
-      
-      console.log(`[AudioManager] Starting new recording for question ${questionId}`);
-      
-      // Mark this question as being recorded
-      globalAudioStore.activeRecordings.add(questionId);
-      
-      // Set recording state
-      setState(prev => ({
-        ...prev,
-        currentQuestionId: questionId,
-        isRecording: true,
-        recordingUrl: null,
-        recordingBlob: null,
-        error: null
-      }));
-      
-      // Request microphone access
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      
-      // Configure recorder with better settings for audio quality
-      const recorder = new MediaRecorder(stream, {
-        audioBitsPerSecond: 128000,
-        mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
-          ? 'audio/webm;codecs=opus' 
-          : 'audio/webm'
       });
       
-      // Storage for audio chunks
-      const audioChunks: Blob[] = [];
+      // Store the stream for later cleanup
+      streamRef.current = stream;
       
-      // Collect audio chunks
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          audioChunks.push(e.data);
+      // Determine best audio format - prefer WAV but fallback to others
+      const mimeTypes = [
+        'audio/wav',
+        'audio/webm;codecs=pcm',
+        'audio/webm',
+        'audio/ogg;codecs=opus',
+        'audio/mp4'
+      ];
+      
+      let selectedMimeType = '';
+      for (const mimeType of mimeTypes) {
+        if (MediaRecorder.isTypeSupported(mimeType)) {
+          selectedMimeType = mimeType;
+          break;
+        }
+      }
+      
+      if (!selectedMimeType) {
+        // If none of our preferred types are supported, use the default
+        console.warn('[AudioManager] None of the preferred MIME types are supported. Using browser default');
+        selectedMimeType = '';
+      }
+      
+      console.log(`[AudioManager] Using MIME type: ${selectedMimeType || 'browser default'}`);
+      
+      // Create MediaRecorder with options for best quality
+      const recorder = new MediaRecorder(stream, {
+        mimeType: selectedMimeType,
+        audioBitsPerSecond: 128000
+      });
+      
+      // Setup data handler
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          console.log(`[AudioManager] Received audio chunk: ${event.data.size} bytes, type: ${event.data.type}`);
+          audioChunksRef.current.push(event.data);
+        } else {
+          console.warn('[AudioManager] Empty audio chunk received');
         }
       };
       
-      // Handle completion
-      recorder.onstop = () => {
-        // Remove from active recordings set
-        globalAudioStore.activeRecordings.delete(questionId);
-        
-        // Stop all tracks
-        stream.getTracks().forEach(track => track.stop());
-        
-        // Don't update if component unmounted
-        if (!isMountedRef.current) return;
-        
+      return recorder;
+    } catch (err) {
+      console.error('[AudioManager] Error setting up MediaRecorder:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error accessing microphone';
+      setError(errorMessage);
+      
+      if (onRecordingError) {
+        onRecordingError(errorMessage);
+      }
+      
+      throw err;
+    }
+  }, [onRecordingError]);
+  
+  // Clean up recording resources
+  const cleanupRecording = useCallback(() => {
+    console.log('[AudioManager] Cleaning up recording resources');
+    
+    // Stop MediaRecorder if active
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch (err) {
+        console.warn('[AudioManager] Error stopping MediaRecorder:', err);
+      }
+    }
+    
+    // Stop and release media tracks
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => {
         try {
-          // Process audio data
-          const audioBlob = new Blob(audioChunks, { type: recorder.mimeType });
-          const audioUrl = URL.createObjectURL(audioBlob);
+          track.stop();
+        } catch (err) {
+          console.warn('[AudioManager] Error stopping track:', err);
+        }
+      });
+      streamRef.current = null;
+    }
+    
+    // Reset state
+    mediaRecorderRef.current = null;
+    setIsRecording(false);
+  }, []);
+  
+  // Start recording audio
+  const recordAudio = useCallback(async (id: string, durationSeconds: number = 60): Promise<(() => void) | undefined> => {
+    try {
+      // Clear previous state
+      setError(null);
+      audioChunksRef.current = [];
+      setRecordingBlob(null);
+      setRecordingUrl(null);
+      
+      // Store the ID for this recording session
+      recordingIdRef.current = id;
+      
+      console.log(`[AudioManager] Starting recording for ID: ${id}`);
+      
+      // Setup the MediaRecorder
+      const recorder = await setupMediaRecorder();
+      mediaRecorderRef.current = recorder;
+      
+      // Register completion handler
+      recorder.onstop = async () => {
+        try {
+          console.log(`[AudioManager] Recording stopped for ID: ${recordingIdRef.current}`);
           
-          console.log(`[AudioManager] Recording complete for ${questionId}, size: ${audioBlob.size} bytes`);
+          // Validate that we have audio chunks
+          if (audioChunksRef.current.length === 0) {
+            throw new Error('No audio data recorded');
+          }
           
-          // Store in global store with timestamp to ensure we can identify it later
-          globalAudioStore.recordings[questionId] = {
-            blob: audioBlob,
-            url: audioUrl,
-            timestamp: Date.now(),
-            processed: false
-          };
+          // Get the recorded ID
+          const recordingId = recordingIdRef.current;
+          if (!recordingId) {
+            throw new Error('Recording ID not set');
+          }
           
-          // Update state
-          setState(prev => ({
-            ...prev,
-            isRecording: false,
-            recordingUrl: audioUrl,
-            recordingBlob: audioBlob
-          }));
+          // Create blob from chunks
+          const blob = new Blob(audioChunksRef.current, { 
+            type: audioChunksRef.current[0].type || 'audio/webm'
+          });
           
-          // Calculate estimated duration
-          const estimatedDuration = estimateDuration(audioBlob);
-          setState(prev => ({ ...prev, audioDuration: estimatedDuration }));
+          console.log(`[AudioManager] Created audio blob: ${blob.size} bytes, type: ${blob.type}`);
+          
+          // Create URL for playback
+          const url = URL.createObjectURL(blob);
+          
+          // Store in component state
+          setRecordingBlob(blob);
+          setRecordingUrl(url);
+          
+          // Store in global state for access from other components
+          if (window.globalAudioStore) {
+            window.globalAudioStore.recordings[recordingId] = { blob, url };
+          }
           
           // Notify parent component
-          if (onRecordingComplete && isMountedRef.current) {
-            globalAudioStore.recordings[questionId].processed = true;
-            onRecordingComplete(questionId, audioBlob, audioUrl);
+          if (onRecordingComplete) {
+            console.log(`[AudioManager] Calling onRecordingComplete for ID: ${recordingId}`);
+            onRecordingComplete(recordingId, blob, url);
           }
-        } catch (error) {
-          console.error('[AudioManager] Error processing audio:', error);
+        } catch (err) {
+          console.error('[AudioManager] Error processing recording:', err);
+          const errorMessage = err instanceof Error ? err.message : 'Error creating audio file';
+          setError(errorMessage);
           
-          if (isMountedRef.current) {
-            setState(prev => ({
-              ...prev,
-              isRecording: false,
-              error: 'Failed to process recording'
-            }));
-            
-            if (onRecordingError) {
-              onRecordingError('Failed to process recording');
-            }
+          if (onRecordingError) {
+            onRecordingError(errorMessage);
           }
         }
       };
       
-      // Start recording with 200ms timeslices for consistent chunks
-      recorder.start(200);
+      // Start recording
+      recorder.start(1000); // Capture data in 1-second chunks for better reliability
+      setIsRecording(true);
       
-      // Set up auto-stop timer
-      setTimeout(() => {
-        if (recorder.state === 'recording') {
-          recorder.stop();
+      console.log(`[AudioManager] Started recording for duration: ${durationSeconds}s`);
+      
+      // Set timeout to stop recording after specified duration
+      const timeoutId = setTimeout(() => {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+          console.log(`[AudioManager] Auto-stopping recording after ${durationSeconds}s`);
+          stopRecording(id);
         }
       }, durationSeconds * 1000);
       
+      // Return a cleanup function
       return () => {
-        // Clean up function
-        if (recorder.state === 'recording') {
-          recorder.stop();
-        }
-        stream.getTracks().forEach(track => track.stop());
-        globalAudioStore.activeRecordings.delete(questionId);
+        console.log(`[AudioManager] Cleanup function called for ID: ${id}`);
+        clearTimeout(timeoutId);
+        cleanupRecording();
       };
-    } catch (error) {
-      console.error('[AudioManager] Error starting recording:', error);
+    } catch (err) {
+      console.error('[AudioManager] Error in recordAudio:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Failed to start recording';
+      setError(errorMessage);
       
-      // Remove from active recordings set on error
-      globalAudioStore.activeRecordings.delete(questionId);
-      
-      if (isMountedRef.current) {
-        setState(prev => ({
-          ...prev,
-          isRecording: false,
-          error: 'Failed to access microphone'
-        }));
-        
-        if (onRecordingError) {
-          onRecordingError('Failed to access microphone');
-        }
+      if (onRecordingError) {
+        onRecordingError(errorMessage);
       }
+      
+      cleanupRecording();
     }
-  }, [onRecordingComplete, onRecordingError]);
+  }, [setupMediaRecorder, cleanupRecording, onRecordingComplete, onRecordingError]);
   
-  // Estimate duration from blob size
-  const estimateDuration = (blob: Blob | null | undefined): number => {
-    if (!blob) return 0;
-    // Estimate based on typical audio bitrate (128kbps)
-    return Math.max(3, Math.min(60, Math.round(blob.size / (128000 / 8))));
-  };
-  
-  // Get recording info for a question ID
-  const getRecording = useCallback((questionId: string): AudioRecording | null => {
-    const recording = globalAudioStore.recordings[questionId];
-    if (!recording) return null;
+  // Manually stop recording
+  const stopRecording = useCallback((id: string) => {
+    console.log(`[AudioManager] Manual stop recording for ID: ${id}`);
     
-    return {
-      blob: recording.blob,
-      url: recording.url,
-      timestamp: recording.timestamp
-    };
-  }, []);
-  
-  // Clear all recordings
-  const clearAllRecordings = useCallback(() => {
-    // Revoke all URLs first to prevent memory leaks
-    Object.values(globalAudioStore.recordings).forEach(recording => {
+    // Only proceed if this is the current recording session
+    if (recordingIdRef.current === id && mediaRecorderRef.current) {
       try {
-        URL.revokeObjectURL(recording.url);
-      } catch (e) {
-        console.error('[AudioManager] Error revoking URL:', e);
+        // Don't stop if already inactive
+        if (mediaRecorderRef.current.state !== 'inactive') {
+          mediaRecorderRef.current.stop();
+          console.log(`[AudioManager] Stopped recording for ID: ${id}`);
+        } else {
+          console.log(`[AudioManager] MediaRecorder already inactive for ID: ${id}`);
+        }
+      } catch (err) {
+        console.error(`[AudioManager] Error stopping recording for ID: ${id}:`, err);
+        // Continue with cleanup even if stop fails
       }
-    });
-    
-    // Clear the storage
-    globalAudioStore.recordings = {};
-    globalAudioStore.activeRecordings.clear();
-    
-    // Reset state
-    setState(prev => ({
-      ...prev,
-      recordingUrl: null,
-      recordingBlob: null,
-      audioDuration: null
-    }));
-  }, []);
-
-  // Stop recording for a specific question ID
-  const stopRecording = useCallback((questionId: string) => {
-    console.log(`[AudioManager] Manually stopping recording for ${questionId}`);
-    
-    // Check if this question ID is being recorded
-    if (!globalAudioStore.activeRecordings.has(questionId)) {
-      console.log(`[AudioManager] No active recording found for ${questionId}`);
-      return;
+      
+      // Clean up resources
+      cleanupRecording();
+    } else {
+      console.warn(`[AudioManager] Ignored stop request for ID: ${id} (current ID: ${recordingIdRef.current})`);
     }
-    
-    // Find the MediaRecorder instances - we can't directly access them here
-    // but we can signal that we want to stop by setting a flag
-    globalAudioStore.activeRecordings.delete(questionId);
-    
-    // Set state to indicate recording is stopping
-    setState(prev => ({
-      ...prev,
-      isRecording: false
-    }));
-    
-    // Force finalization of any existing media tracks
-    if (typeof navigator !== 'undefined' && navigator.mediaDevices) {
-      navigator.mediaDevices.getUserMedia({ audio: true })
-        .then(stream => {
-          // Stop any active tracks
-          stream.getTracks().forEach(track => {
-            console.log(`[AudioManager] Stopping track: ${track.id}`);
-            track.stop();
-          });
-        })
-        .catch(err => {
-          console.error('[AudioManager] Error stopping media tracks:', err);
-        });
-    }
-    
-    // Note: The actual stopping happens via the cleanup function that was returned
-    // by recordAudio and is called by SimpleAudioRecorder
-    
-    console.log(`[AudioManager] Requested stop for ${questionId}`);
-  }, []);
-
-  // Expose the globalAudioStore to the window object for debugging and cross-component access
-  if (typeof window !== 'undefined') {
-    (window as any).globalAudioStore = globalAudioStore;
-  }
-
+  }, [cleanupRecording]);
+  
   return {
-    ...state,
+    isRecording,
+    recordingUrl,
+    recordingBlob,
+    error,
     recordAudio,
     stopRecording,
-    getRecording,
-    clearAllRecordings
   };
-}
+};
 
 export default useAudioManager; 

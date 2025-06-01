@@ -7,19 +7,44 @@ import {
   Volume2,
   VolumeX,
   AlertCircle,
-  Clock 
+  Clock,
+  Loader2,
+  ArrowLeft,
+  ArrowRight,
+  CheckCircle,
+  Mic,
+  Square,
+  Play,
+  Pause
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { MainTestUIProps, PART_NAMES } from './types'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Progress } from '@/components/ui/progress'
+import { Badge } from '@/components/ui/badge'
+
+// Import all types from the types file
+import {
+  MainTestUIProps,
+  PART_NAMES,
+  SpeakingTestAction,
+  UserResponse,
+  TestQuestion,
+  TestInfo
+} from '../types'
+
 import { formatTime } from '../testUtils'
 
-// Import speaking-specific components
+// Import remaining components and utilities from the correct path
+import QuestionHeader from '@/components/speaking/QuestionHeader'
+import PartProgressIndicator from '@/components/speaking/PartProgressIndicator'
+import PreparationTimer from '@/components/speaking/PreparationTimer'
+import AudioRecorder from '@/components/speaking/AudioRecorder'
+import QuestionDisplay from '@/components/speaking/QuestionDisplay'
+import TestControls from '@/components/speaking/TestControls'
 import TestSectionHeader from '@/components/speaking/TestSectionHeader'
 import SimpleAudioRecorder from '@/components/speaking/SimpleAudioRecorder'
-import CountdownDisplay from '@/components/speaking/CountdownDisplay'
-import PreparationTimer from '@/components/speaking/PreparationTimer'
 
 // Import helper functions from testUtils
 // import { getBrowserInfo } from '../testUtils'
@@ -39,7 +64,8 @@ const MainTestUI: React.FC<MainTestUIProps> = ({
   error,
   dispatch,
   submitAllResponsesAsync,
-  onQuestionTimerUpdate
+  onQuestionTimerUpdate,
+  handleSubmitTest
 }) => {
   const [recordingStatus, setRecordingStatus] = useState<'idle' | 'recording' | 'processing' | 'complete'>('idle');
   
@@ -174,25 +200,16 @@ const MainTestUI: React.FC<MainTestUIProps> = ({
   
   const handleSubmitDialogConfirm = useCallback(async () => {
     try {
-      console.log('[MainTestUI] Submitting responses...');
-      // Wait for the submission to complete before closing the dialog
-      await submitAllResponsesAsync();
-      console.log('[MainTestUI] Submission completed successfully');
-      
-      // Ensure the test is marked as completed even if the reducer didn't set it
-      dispatch({ type: 'SUBMIT_ALL_RESPONSES_SUCCESS', payload: { 
-        allFeedback: userResponses,
-        overallFeedback: null // This will use the default values if API calls failed
-      }});
-      
-      dispatch({ type: 'CLOSE_SUBMIT_DIALOG' });
+      // Use handleSubmitTest if available, otherwise use submitAllResponsesAsync
+      if (handleSubmitTest) {
+        await handleSubmitTest();
+      } else {
+        await submitAllResponsesAsync();
+      }
     } catch (error) {
-      console.error('[MainTestUI] Error during submission:', error);
-      // Set error message if submission fails
-      dispatch({ type: 'SET_ERROR', payload: 'Failed to submit responses. Please try again.' });
-      // Keep dialog open on error
+      console.error('Error during test submission:', error);
     }
-  }, [dispatch, submitAllResponsesAsync, userResponses]);
+  }, [handleSubmitTest, submitAllResponsesAsync]);
   
   const handleSubmitDialogCancel = useCallback(() => {
     dispatch({ type: 'CLOSE_SUBMIT_DIALOG' });

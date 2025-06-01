@@ -5,12 +5,18 @@ import { AzureOpenAI } from 'openai'
 import { auth } from '@clerk/nextjs/server'
 import { clerkToSupabaseId } from '@/lib/clerkSupabaseAdapter'
 import fetch from 'node-fetch'
+import { createClient } from '@supabase/supabase-js'
+
+// Configure supabase client
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
+const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey)
 
 // Configure Azure OpenAI client
 const endpoint = process.env.AZURE_OPENAI_ENDPOINT || 'https://arnur-maw58kmn-swedencentral.cognitiveservices.azure.com'
 const apiVersion = process.env.AZURE_OPENAI_API_VERSION_WHISPER || '2024-06-01'
 const deployment = process.env.AZURE_OPENAI_DEPLOYMENT_WHISPER || 'whisper'
-const apiKey = process.env.AZURE_OPENAI_API_KEY
+const apiKey = process.env.AZURE_OPENAI_API_KEY || 'AMvnGtAnULquGoRp2z7c82dwxbynfqQQ4kirI17ayYB0gsS6EeKmJQQJ99BEACfhMk5XJ3w3AAAAACOG5yz4'
 
 // Check if required environment variables are available
 if (!endpoint || !apiKey) {
@@ -38,232 +44,382 @@ const openai = new AzureOpenAI({
   deployment
 })
 
-// Function to transcribe audio using Azure OpenAI Whisper
-async function transcribeAudio(audioData: ArrayBuffer | Buffer, filename: string, fileType: string): Promise<string> {
-  try {
-    console.log(`[transcribeAudio] Preparing request to ${endpoint}/openai/deployments/${deployment}/audio/transcriptions`);
-    console.log(`[transcribeAudio] File size: ${Math.round((audioData.byteLength || 0) / 1024)} KB`);
-    console.log(`[transcribeAudio] File type: ${fileType}, name: ${filename}`);
-    
-    // Convert buffer to proper format
-    const fileBuffer = Buffer.isBuffer(audioData) ? audioData : Buffer.from(audioData);
-    
-    // Create multipart form data with proper boundary
-    const boundary = `----WebKitFormBoundary${Math.random().toString(16).substr(2)}`;
-    const body = createMultipartFormData(boundary, 'file', fileBuffer, filename, fileType);
-    
-    // Note: We use the transcriptions endpoint, not translations
-    const apiUrl = `${endpoint}/openai/deployments/${deployment}/audio/transcriptions?api-version=${apiVersion}`;
-    console.log(`[transcribeAudio] Sending direct API request to: ${apiUrl}`);
-    
-    const headers: HeadersInit = {
-      'Content-Type': `multipart/form-data; boundary=${boundary}`,
-    };
-    if (apiKey) {
-      headers['api-key'] = apiKey;
-    }
+// Create multipart form data with binary audio
+function createAzureMultipartFormData(boundary: string, fieldName: string, fileBuffer: Buffer, filename: string, contentType: string): Buffer {
+  const parts = [];
+  
+  parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${fieldName}"; filename="${filename}"\r\nContent-Type: ${contentType}\r\n\r\n`));
+  parts.push(fileBuffer);
+  parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+  
+  return Buffer.concat(parts);
+}
 
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: headers,
-      body
+async function extractAudioData(req: Request): Promise<{fileBuffer: Buffer, filename: string, fileType: string}> {
+  const contentTypeHeader = req.headers.get('content-type') || '';
+  
+  if (contentTypeHeader.includes('multipart/form-data')) {
+    console.log('[transcribeAudio] Processing multipart/form-data for audio extraction');
+    const formData = await req.formData();
+    const file = formData.get('file') as File;
+    if (!file) {
+      throw new Error('No audio file found in form data for extraction');
+    }
+    console.log(`[transcribeAudio] Extracting file: ${file.name}, type: ${file.type}, size: ${file.size} bytes`);
+    const fileBuffer = Buffer.from(await file.arrayBuffer());
+    
+    // Enhanced debugging for uploaded files
+    console.log('[transcribeAudio] File buffer analysis:', {
+      bufferLength: fileBuffer.length,
+      firstBytes: Array.from(fileBuffer.slice(0, 20)),
+      lastBytes: Array.from(fileBuffer.slice(-20)),
+      nonZeroBytes: fileBuffer.filter(byte => byte !== 0).length,
+      contentPercentage: `${(fileBuffer.filter(byte => byte !== 0).length / fileBuffer.length * 100).toFixed(1)}%`
     });
     
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[transcribeAudio] Azure OpenAI API error: ${response.status}`, errorText);
-      throw new Error(`Azure OpenAI API error: ${response.status} - ${errorText}`);
+    return { fileBuffer, filename: file.name || 'audio.webm', fileType: file.type || 'audio/webm' };
+  }
+  
+  const requestData = await req.json();
+  const { audioUrl, isDataUrl, isSynthetic, isPlaceholder } = requestData;
+  console.log(`[transcribeAudio] Processing JSON request for audio extraction: isDataUrl=${isDataUrl}, isSynthetic=${isSynthetic}, isPlaceholder=${isPlaceholder}`);
+
+  if (isSynthetic || isPlaceholder) {
+    console.log('[transcribeAudio] Using placeholder for synthetic/placeholder audio extraction');
+    return { 
+      fileBuffer: Buffer.from('PLACEHOLDER_AUDIO_CONTENT'), 
+      filename: 'placeholder.wav', 
+      fileType: 'audio/wav' 
+    };
+  }
+  
+  try {
+    if (isDataUrl) {
+      const matches = audioUrl.match(/^data:(.+);base64,(.+)$/);
+      if (!matches) throw new Error('Invalid data URL format for extraction');
+      const fileType = matches[1];
+      const base64Data = matches[2];
+      const fileBuffer = Buffer.from(base64Data, 'base64');
+      const extension = fileType.split('/')[1] || 'webm';
+      console.log(`[transcribeAudio] Extracted data URL for audio: type=${fileType}, size=${fileBuffer.length} bytes`);
+      
+      // Enhanced debugging for data URLs
+      console.log('[transcribeAudio] Data URL buffer analysis:', {
+        bufferLength: fileBuffer.length,
+        firstBytes: Array.from(fileBuffer.slice(0, 20)),
+        nonZeroBytes: fileBuffer.filter(byte => byte !== 0).length,
+        contentPercentage: `${(fileBuffer.filter(byte => byte !== 0).length / fileBuffer.length * 100).toFixed(1)}%`
+      });
+      
+      return { fileBuffer, filename: `audio.${extension}`, fileType };
+    } else {
+      console.log(`[transcribeAudio] Fetching audio from URL for extraction: ${audioUrl.substring(0, 60)}...`);
+      const response = await fetch(audioUrl);
+      if (!response.ok) throw new Error(`Failed to fetch audio for extraction: ${response.status} ${response.statusText}`);
+      const fileBuffer = Buffer.from(await response.arrayBuffer());
+      const responseContentType = response.headers.get('content-type') || 'audio/webm';
+      const extension = responseContentType.split('/')[1] || 'webm';
+      console.log(`[transcribeAudio] Fetched audio from URL for extraction: type=${responseContentType}, size=${fileBuffer.length} bytes`);
+      
+      // Enhanced debugging for fetched URLs
+      console.log('[transcribeAudio] Fetched URL buffer analysis:', {
+        bufferLength: fileBuffer.length,
+        firstBytes: Array.from(fileBuffer.slice(0, 20)),
+        nonZeroBytes: fileBuffer.filter(byte => byte !== 0).length,
+        contentPercentage: `${(fileBuffer.filter(byte => byte !== 0).length / fileBuffer.length * 100).toFixed(1)}%`
+      });
+      
+      return { fileBuffer, filename: `audio.${extension}`, fileType: responseContentType };
     }
-    
-    const result = await response.json();
-    console.log(`[transcribeAudio] Successfully received transcript, length: ${result.text?.length || 0} chars`);
-    return result.text || '';
   } catch (error) {
-    console.error('[transcribeAudio] Error:', error);
-    throw error;
+    console.error('[transcribeAudio] Error extracting audio data:', error);
+    throw new Error('Failed to process audio URL or data for extraction');
   }
 }
 
-// Helper function to create multipart form data from a buffer
-function createMultipartFormData(boundary: string, fieldName: string, fileBuffer: Buffer, filename: string, contentType: string): Buffer {
-  const modelField = `--${boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\nwhisper-1\r\n`;
-  const fileHeader = `--${boundary}\r\nContent-Disposition: form-data; name="${fieldName}"; filename="${filename}"\r\nContent-Type: ${contentType}\r\n\r\n`;
-  const fileFooter = `\r\n--${boundary}--\r\n`;
+// Generate a simple WAV file for fallback 
+function createFallbackWavAudio(): Buffer {
+  // Create a very basic 1-second silent WAV file (16-bit, 44.1kHz, mono)
+  const sampleRate = 44100;
+  const numSamples = sampleRate * 1; // 1 second
   
-  const headerBuffer = Buffer.from(modelField + fileHeader);
-  const footerBuffer = Buffer.from(fileFooter);
+  // WAV header (44 bytes)
+  const headerBuffer = Buffer.alloc(44);
   
-  return Buffer.concat([headerBuffer, fileBuffer, footerBuffer]);
+  // RIFF chunk descriptor
+  headerBuffer.write('RIFF', 0);
+  headerBuffer.writeUInt32LE(36 + numSamples * 2, 4); // Chunk size
+  headerBuffer.write('WAVE', 8);
+  
+  // "fmt " sub-chunk
+  headerBuffer.write('fmt ', 12);
+  headerBuffer.writeUInt32LE(16, 16); // Subchunk1 size
+  headerBuffer.writeUInt16LE(1, 20); // Audio format (PCM)
+  headerBuffer.writeUInt16LE(1, 22); // Num channels (mono)
+  headerBuffer.writeUInt32LE(sampleRate, 24); // Sample rate
+  headerBuffer.writeUInt32LE(sampleRate * 2, 28); // Byte rate
+  headerBuffer.writeUInt16LE(2, 32); // Block align
+  headerBuffer.writeUInt16LE(16, 34); // Bits per sample
+  
+  // "data" sub-chunk
+  headerBuffer.write('data', 36);
+  headerBuffer.writeUInt32LE(numSamples * 2, 40); // Subchunk2 size
+  
+  // Create a data buffer with silence (zeros) instead of sine wave
+  // This will be recognized as silence by Whisper and return empty transcript
+  const dataBuffer = Buffer.alloc(numSamples * 2, 0); // Fill with zeros for silence
+  
+  // Combine header and data
+  return Buffer.concat([headerBuffer, dataBuffer]);
 }
 
-// Helper to fetch remote audio
-async function fetchRemoteAudio(url: string): Promise<Buffer> {
+// Function to prepare audio in a format Azure will accept
+async function prepareAudioForAzure(fileBuffer: Buffer, fileType: string): Promise<{buffer: Buffer, fileType: string}> {
+  // If it's our placeholder content, return a generated WAV file
+  if (fileBuffer.toString() === 'PLACEHOLDER_AUDIO_CONTENT') {
+    console.log('[prepareAudioForAzure] Creating a fallback WAV file for placeholder content');
+    return { 
+      buffer: createFallbackWavAudio(),
+      fileType: 'audio/wav'
+    };
+  }
+  
+  // CRITICAL FIX: Don't convert webm;codecs=opus - it's already a valid format for Azure
+  if (fileType === 'audio/webm;codecs=opus' || fileType === 'audio/webm') {
+    console.log(`[prepareAudioForAzure] Keeping original webm format - Azure Whisper supports this natively`);
+    return { buffer: fileBuffer, fileType: 'audio/webm' };
+  }
+  
+  // If it's already a format that we know Azure accepts
+  if (
+    fileType === 'audio/wav' || 
+    fileType === 'audio/mp3' || 
+    fileType === 'audio/mp4' || 
+    fileType === 'audio/mpeg' ||
+    fileType === 'audio/ogg'
+  ) {
+    console.log(`[prepareAudioForAzure] Audio is already in a compatible format: ${fileType}`);
+    return { buffer: fileBuffer, fileType };
+  }
+  
+  console.log(`[prepareAudioForAzure] Unsupported format ${fileType}, but trying anyway`);
+  return { buffer: fileBuffer, fileType };
+}
+
+// Simple function to try converting raw PCM to WAV by adding a header
+function convertRawAudioToWav(pcmBuffer: Buffer): Buffer {
+  // PCM data in webm;codecs=pcm is usually 16-bit signed integer at 48kHz
+  const sampleRate = 48000;
+  const numChannels = 1; // Mono
+  const bitsPerSample = 16;
+  
+  // Create WAV header
+  const headerBuffer = Buffer.alloc(44);
+  
+  // RIFF chunk descriptor
+  headerBuffer.write('RIFF', 0);
+  headerBuffer.writeUInt32LE(36 + pcmBuffer.length, 4); // Chunk size
+  headerBuffer.write('WAVE', 8);
+  
+  // "fmt " sub-chunk
+  headerBuffer.write('fmt ', 12);
+  headerBuffer.writeUInt32LE(16, 16); // Subchunk1 size
+  headerBuffer.writeUInt16LE(1, 20); // Audio format (PCM)
+  headerBuffer.writeUInt16LE(numChannels, 22); // Num channels
+  headerBuffer.writeUInt32LE(sampleRate, 24); // Sample rate
+  headerBuffer.writeUInt32LE(sampleRate * numChannels * bitsPerSample / 8, 28); // Byte rate
+  headerBuffer.writeUInt16LE(numChannels * bitsPerSample / 8, 32); // Block align
+  headerBuffer.writeUInt16LE(bitsPerSample, 34); // Bits per sample
+  
+  // "data" sub-chunk
+  headerBuffer.write('data', 36);
+  headerBuffer.writeUInt32LE(pcmBuffer.length, 40); // Subchunk2 size
+  
+  // Combine header and PCM data
+  return Buffer.concat([headerBuffer, pcmBuffer]);
+}
+
+// Fix function to normalize audio file type for Azure API
+function normalizeFileTypeForAzure(fileType: string): string {
+  // Handle the codec parameter that's causing failures
+  if (fileType.includes('webm;codecs=pcm')) {
+    console.log('[normalizeFileTypeForAzure] Converting audio/webm;codecs=pcm to audio/webm');
+    return 'audio/webm';
+  }
+  
+  // Handle other potentially problematic formats
+  if (fileType.includes(';')) {
+    // Strip any codec information or parameters
+    const baseType = fileType.split(';')[0].trim();
+    console.log(`[normalizeFileTypeForAzure] Simplifying ${fileType} to ${baseType}`);
+    return baseType;
+  }
+  
+  return fileType;
+}
+
+// Fix function to update filename extension based on normalized content type
+function getExtensionFromContentType(contentType: string): string {
+  const baseType = contentType.split('/')[1]?.split(';')[0] || 'webm';
+  return baseType;
+}
+
+async function performAzureTranscription(fileBuffer: Buffer, filename: string, fileType: string): Promise<string> {
   try {
-    const response = await fetch(url)
-    if (!response.ok) {
-      throw new Error(`Failed to fetch remote audio: ${response.status} - ${response.statusText}`)
+    console.log(`[performAzureTranscription] Starting for file: ${filename}, type: ${fileType}, size: ${fileBuffer.length} bytes`);
+    
+    // Only reject extremely small files (under 50 bytes), give others a chance
+    if (fileBuffer.length < 50 && fileBuffer.toString() !== 'PLACEHOLDER_AUDIO_CONTENT') {
+      console.log('[performAzureTranscription] Audio file extremely small (< 50 bytes), likely corrupted.');
+      return "Audio file appears to be corrupted. Please try recording again.";
     }
     
-    const arrayBuffer = await response.arrayBuffer()
-    return Buffer.from(arrayBuffer)
-  } catch (error) {
-    console.error('[fetchRemoteAudio] Error:', error)
-    throw error
-  }
-}
-
-export async function POST(request: NextRequest) {
-  try {
-    // Authentication - try both Clerk and Supabase
-    let userId = null
+    // First, prepare the audio in a compatible format
+    const { buffer: preparedBuffer, fileType: preparedFileType } = await prepareAudioForAzure(fileBuffer, fileType);
+    console.log(`[performAzureTranscription] Audio prepared for Azure, new format: ${preparedFileType}, size: ${preparedBuffer.length} bytes`);
     
-    // First try Clerk auth
+    // Update filename to match the new format - keep webm extension for webm files
+    let preparedFilename = filename;
+    if (preparedFileType === 'audio/webm') {
+      preparedFilename = filename.replace(/\.[^.]+$/, '.webm');
+    } else {
+      const extension = preparedFileType.split('/')[1];
+      preparedFilename = filename.replace(/\.[^.]+$/, `.${extension}`);
+    }
+    
+    const boundary = `----WebKitFormBoundary${Math.random().toString(16).substr(2)}`;
+    const body = createAzureMultipartFormData(boundary, 'file', preparedBuffer, preparedFilename, preparedFileType);
+    const apiVersion = '2024-06-01';
+    const apiUrl = `${endpoint}/openai/deployments/${deployment}/audio/translations?api-version=${apiVersion}`;
+    console.log(`[performAzureTranscription] Sending request to: ${apiUrl}`);
+    const queryParams = new URLSearchParams({
+      'language': 'en',
+      'response_format': 'json',
+      'temperature': '0'
+    });
+    const fullUrl = `${apiUrl}&${queryParams.toString()}`;
+    console.log(`[performAzureTranscription] Full request URL: ${fullUrl}`);
+    
+    const response = await fetch(fullUrl, {
+      method: 'POST',
+      headers: {
+        'api-key': apiKey,
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+      },
+      body: body,
+    });
+    
+    const responseText = await response.text();
+    console.log(`[performAzureTranscription] Raw API response: ${responseText.substring(0,500)}`);
+    if (!response.ok) {
+      console.error(`[performAzureTranscription] API error: ${response.status} - ${responseText}`);
+      
+      // Handle specific Azure errors gracefully
+      try {
+        const errorData = JSON.parse(responseText);
+        if (errorData.error?.code === 'audio_too_short') {
+          console.log('[performAzureTranscription] Audio too short error from Azure');
+          return "The recording was too short. Please speak for at least 1-2 seconds and try again.";
+        }
+        if (errorData.error?.code === 'invalid_audio') {
+          console.log('[performAzureTranscription] Invalid audio error from Azure');
+          return "The audio recording is invalid or corrupted. Please try recording again.";
+        }
+      } catch (parseError) {
+        console.log('[performAzureTranscription] Could not parse error response');
+      }
+      
+      throw new Error(`Transcription API error (${response.status})`);
+    }
+    
+    // Parse the JSON response from Azure
+    let responseData;
     try {
-      const session = await auth()
-      if (session?.userId) {
-        userId = clerkToSupabaseId(session.userId)
-        console.log(`[API:transcribe] Authenticated via Clerk: ${userId.substring(0, 8)}...`)
-      }
-    } catch (clerkError) {
-      console.error('[API:transcribe] Clerk auth error:', clerkError)
-    }
-    
-    // Try Supabase auth if Clerk failed
-    if (!userId) {
-      try {
-        // Create Supabase client with proper cookie handling
-        const supabase = createRouteHandlerClient({ cookies });
-        
-        const { data: { user } } = await supabase.auth.getUser()
-        if (user) {
-          userId = user.id
-          console.log(`[API:transcribe] Authenticated via Supabase: ${userId.substring(0, 8)}...`)
-        }
-      } catch (supabaseError) {
-        console.error('[API:transcribe] Supabase auth error:', supabaseError)
-      }
+      responseData = JSON.parse(responseText);
+    } catch (parseError) {
+      console.error('[performAzureTranscription] Error parsing Azure response JSON:', parseError, 'Raw response:', responseText);
+      throw new Error('Failed to parse Azure transcription response');
     }
 
-    // Parse request - support multiple formats
-    const contentType = request.headers.get('content-type') || ''
-    
-    // Handle JSON payload (including data URLs)
-    if (contentType.includes('application/json')) {
-      const { audioUrl, isDataUrl, userId: clientUserId, questionId } = await request.json()
+    // Check the text for the transcribed content
+    if (responseData && typeof responseData.text === 'string') {
+      const transcribedText = responseData.text.trim();
       
-      // If no user ID from auth, use the one provided by client
-      if (!userId && clientUserId) {
-        userId = clientUserId
-        console.log(`[API:transcribe] Using client-provided user ID: ${userId.substring(0, 8)}...`)
+      if (transcribedText === "") {
+        console.log('[performAzureTranscription] Azure returned empty text (silence detected)');
+        return "[No speech detected]";
       }
       
-      if (!audioUrl) {
-        return NextResponse.json({ error: 'No audio URL provided' }, { status: 400 })
-      }
+      // Check for common Whisper artifacts that indicate non-speech audio
+      const commonArtifacts = [
+        "thanks for watching",
+        "thank you for watching", 
+        "thanks for listening",
+        "thank you for listening",
+        "music playing",
+        "music",
+        "♪",
+        "♫"
+      ];
       
-      // Process data URL
-      if ((isDataUrl === true || audioUrl.startsWith('data:'))) {
-        console.log('[API:transcribe] Processing data URL')
-        try {
-          // Convert data URL to buffer
-          const base64Data = audioUrl.split(',')[1]
-          if (!base64Data) {
-            return NextResponse.json(
-              { error: 'Invalid data URL format' },
-              { status: 400 }
-            )
-          }
-          
-          const buffer = Buffer.from(base64Data, 'base64')
-          
-          // Transcribe the audio
-          const text = await transcribeAudio(buffer, `audio-${Date.now()}.webm`, 'audio/webm')
-          
-          return NextResponse.json({ text })
-        } catch (error) {
-          console.error('[API:transcribe] Data URL processing error:', error)
-          return NextResponse.json(
-            { error: 'Failed to transcribe data URL' },
-            { status: 500 }
-          )
-        }
-      }
+      const lowerText = transcribedText.toLowerCase();
+      const isLikelyArtifact = commonArtifacts.some(artifact => 
+        lowerText.includes(artifact.toLowerCase())
+      );
       
-      // Process remote URL
-      if (audioUrl.startsWith('http')) {
-        console.log('[API:transcribe] Processing remote URL')
-        try {
-          // Fetch the remote audio file
-          const audioBuffer = await fetchRemoteAudio(audioUrl)
-          
-          // Transcribe the audio
-          const text = await transcribeAudio(audioBuffer, `audio-${Date.now()}.webm`, 'audio/webm')
-          
-          return NextResponse.json({ text })
-        } catch (error) {
-          console.error('[API:transcribe] Remote URL processing error:', error)
-          return NextResponse.json(
-            { error: 'Failed to transcribe remote audio' },
-            { status: 500 }
-          )
-        }
-      }
-      
-      return NextResponse.json(
-        { error: 'Unsupported audio URL format' },
-        { status: 400 }
-      )
-    }
-    
-    // Handle multipart form (file upload)
-    if (contentType.includes('multipart/form-data')) {
-      try {
-        console.log('[API:transcribe] Processing multipart form data');
-        const formData = await request.formData();
-        const file = formData.get('file') as File | null;
-        
-        if (!file) {
-          console.error('[API:transcribe] No file found in form data');
-          const formKeys = Array.from(formData.keys());
-          console.log('[API:transcribe] Available form fields:', formKeys);
-          return NextResponse.json({ error: 'No file provided' }, { status: 400 });
-        }
-        
-        console.log(`[API:transcribe] Received file: ${file.name}, size: ${Math.round(file.size/1024)}KB, type: ${file.type}`);
-        
-        if (file.size === 0) {
-          console.error('[API:transcribe] File has zero size');
-          return NextResponse.json({ error: 'Empty file provided' }, { status: 400 });
-        }
-        
-        // Convert File to Buffer
-        const arrayBuffer = await file.arrayBuffer();
-        console.log(`[API:transcribe] Converted file to ArrayBuffer: ${Math.round(arrayBuffer.byteLength/1024)}KB`);
-        
-        // Transcribe the audio
-        const text = await transcribeAudio(arrayBuffer, file.name || `audio-${Date.now()}`, file.type || 'audio/wav');
-        console.log(`[API:transcribe] Successfully transcribed audio, text length: ${text.length} chars`);
-        
-        return NextResponse.json({ text });
-      } catch (formError) {
-        console.error('[API:transcribe] Form processing error:', formError);
-        return NextResponse.json(
-          { error: 'Failed to process form data', details: formError instanceof Error ? formError.message : String(formError) },
-          { status: 500 }
+      // Only filter artifacts if they are very short AND exactly match our known patterns
+      // Be more conservative - only filter if it's a very close match to known artifacts
+      if (isLikelyArtifact && transcribedText.length < 30) {
+        const exactMatches = commonArtifacts.filter(artifact => 
+          lowerText === artifact.toLowerCase() || 
+          lowerText === artifact.toLowerCase() + '.' ||
+          lowerText === artifact.toLowerCase() + '!'
         );
+        
+        if (exactMatches.length > 0) {
+          console.log(`[performAzureTranscription] Detected exact artifact match: "${transcribedText}"`);
+          return "[No clear speech detected]";
+        } else {
+          // It contains an artifact but isn't an exact match - could be real speech
+          console.log(`[performAzureTranscription] Contains artifact-like text but not exact match, keeping: "${transcribedText}"`);
+        }
       }
+      
+      console.log(`[performAzureTranscription] Successful: "${transcribedText.substring(0, 50)}..."`);
+      return transcribedText;
+    } else {
+      console.error('[performAzureTranscription] Unexpected API response format from Azure:', responseText);
+      return "[Transcription failed - unexpected response format]";
+    }
+  } catch (error) {
+    console.error('[performAzureTranscription] Error during transcription:', error);
+    throw error; // Re-throw to be caught by the main POST handler
+  }
+}
+
+// API route handler
+export async function POST(req: Request) {
+  try {
+    const { fileBuffer, filename, fileType } = await extractAudioData(req);
+    
+    if (fileBuffer.toString() === 'PLACEHOLDER_AUDIO_CONTENT') {
+      console.log('[POST transcribe] Using placeholder transcription for synthetic/placeholder audio.');
+      return NextResponse.json({ text: "I didn't hear any speech. Please try recording again or check microphone settings." });
     }
     
-    // Unsupported content type
-    return NextResponse.json(
-      { error: `Unsupported content type: ${contentType}` },
-      { status: 400 }
-    )
+    const transcription = await performAzureTranscription(fileBuffer, filename, fileType);
+    return NextResponse.json({ text: transcription });
+
   } catch (error) {
-    console.error('[API:transcribe] Unexpected error:', error)
-    return NextResponse.json(
-      { error: 'Failed to process transcription request' },
-      { status: 500 }
-    )
+    console.error('[POST transcribe] Error in transcription endpoint:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error during transcription processing.';
+    // Add more specific error messages based on type of error if possible
+    if (errorMessage.includes('Failed to process audio URL or data for extraction')) {
+         return NextResponse.json({ error: 'Could not read or access the provided audio data.' }, { status: 400 });
+    }
+    if (errorMessage.includes('No audio file found in form data for extraction')){
+        return NextResponse.json({ error: 'Audio file was not correctly uploaded or sent.' }, { status: 400 });
+    }
+    return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 } 

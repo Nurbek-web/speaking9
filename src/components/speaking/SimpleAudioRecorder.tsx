@@ -19,7 +19,7 @@ const SimpleAudioRecorder: React.FC<SimpleAudioRecorderProps> = ({
 }) => {
   const [recordingStatus, setRecordingStatus] = useState<'idle' | 'recording' | 'complete'>('idle');
   const [timerDisplay, setTimerDisplay] = useState<number | null>(null);
-  const [hasRecordingCompleted, setHasRecordingCompleted] = useState(false);
+  const hasRecordingCompletedRef = useRef(false);
   
   // Add ref to prevent duplicate recording attempts
   const hasStartedRecordingRef = useRef(false);
@@ -30,14 +30,15 @@ const SimpleAudioRecorder: React.FC<SimpleAudioRecorderProps> = ({
   const handleRecordingComplete = useCallback((id: string, blob: Blob, url: string) => {
     // Set local state
     setRecordingStatus('complete');
-    setHasRecordingCompleted(true);
     
-    // Notify parent only once
-    if (id === questionId && !hasRecordingCompleted) {
-      console.log(`[SimpleAudioRecorder] Recording complete for ${id}, notifying parent`);
+    // Notify parent if it's for the current question and hasn't been processed yet
+    // Ensure onComplete is called at least once for the current question when the manager signals completion.
+    if (id === questionId && !hasRecordingCompletedRef.current) {
+      console.log(`[SimpleAudioRecorder] Recording complete for ${id}, blob size: ${blob.size}, notifying parent`);
+      hasRecordingCompletedRef.current = true;
       onComplete(id, blob, url);
     }
-  }, [questionId, onComplete, hasRecordingCompleted]);
+  }, [questionId, onComplete]);
 
   const handleRecordingError = useCallback((errorMsg: string) => {
     console.error(`[SimpleAudioRecorder] Error: ${errorMsg}`);
@@ -85,9 +86,9 @@ const SimpleAudioRecorder: React.FC<SimpleAudioRecorderProps> = ({
         const recording = (window as any).globalAudioStore?.recordings?.[questionId];
         if (recording) {
           console.log(`[SimpleAudioRecorder] Fallback found recording for ${questionId} after delay`);
-          if (!hasRecordingCompleted && recording.blob && recording.url) {
+          if (!hasRecordingCompletedRef.current && recording.blob && recording.url) {
             console.log(`[SimpleAudioRecorder] Notifying parent of recording via fallback for ${questionId}`);
-            setHasRecordingCompleted(true);
+            hasRecordingCompletedRef.current = true;
             onComplete(questionId, recording.blob, recording.url);
           }
         } else {
@@ -95,7 +96,7 @@ const SimpleAudioRecorder: React.FC<SimpleAudioRecorderProps> = ({
         }
       }, 500);
     }
-  }, [questionId, stopRecording, recordingBlob, recordingUrl, hasRecordingCompleted, onComplete]);
+  }, [questionId, stopRecording, recordingBlob, recordingUrl, onComplete]);
 
   // Start timer when recording begins
   useEffect(() => {
@@ -156,6 +157,7 @@ const SimpleAudioRecorder: React.FC<SimpleAudioRecorderProps> = ({
     // Reset the ref when component unmounts and call cleanup function
     return () => {
       hasStartedRecordingRef.current = false;
+      hasRecordingCompletedRef.current = false;
       if (cleanupFunctionRef.current) {
         cleanupFunctionRef.current();
         cleanupFunctionRef.current = null;

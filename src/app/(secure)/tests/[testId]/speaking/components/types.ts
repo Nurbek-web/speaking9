@@ -18,21 +18,29 @@ export { PART_NAMES };
 
 // Define an extended FeedbackResult for this component
 // Making all properties optional for flexibility during overall feedback generation
-export interface FeedbackResult extends Partial<BaseFeedbackResult> {
-  band_score?: number; // Add band_score as optional
-  // Add properties for detailed feedback sections
-  strengths?: string;
-  areas_for_improvement?: string;
-  study_advice?: string;
-  // Add band_scores object for compatibility with TestCompletedUI
-  band_scores?: {
-    fluency: number;
-    lexical: number;
-    grammar: number;
-    pronunciation: number;
-    overall: number;
+export interface FeedbackResult {
+  band_score: number;
+  overall_band_score: number;
+  fluency_coherence_score: number;
+  lexical_resource_score: number;
+  grammar_accuracy_score: number;
+  pronunciation_score: number;
+  general_feedback: string;
+  fluency_coherence_feedback: string;
+  lexical_resource_feedback: string;
+  grammar_accuracy_feedback: string;
+  pronunciation_feedback: string;
+  model_answer: string;
+  band_scores: { 
+    fluency: number; 
+    lexical: number; 
+    grammar: number; 
+    pronunciation: number; 
+    overall: number; 
   };
-  // All other properties from BaseFeedbackResult will also be optional due to Partial
+  strengths: string;
+  areas_for_improvement: string;
+  study_advice: string;
 }
 
 // Re-export the RecordingStatus type for use in components
@@ -138,4 +146,5 @@ export interface MainTestUIProps {
   dispatch: React.Dispatch<SpeakingTestAction>;
   submitAllResponsesAsync: () => Promise<void>;
   onQuestionTimerUpdate: (seconds: number) => void;
+  handleSubmitTest?: () => Promise<void>;
 } 
