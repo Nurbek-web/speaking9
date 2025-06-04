@@ -42,7 +42,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ stage, message }) => {
   ];
   
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-b from-white to-gray-50">
+    <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-b from-background to-muted/50">
       <div className="w-full max-w-md px-6">
         {/* Logo placeholder */}
         <div className="flex justify-center mb-12">
@@ -57,15 +57,15 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ stage, message }) => {
         
         {/* Main content */}
         <div className="text-center mb-12">
-          <h1 className="text-2xl font-medium text-gray-900 mb-2">{message}</h1>
-          <p className="text-gray-500 text-base">
+          <h1 className="text-2xl font-medium text-foreground mb-2">{message}</h1>
+          <p className="text-muted-foreground text-base">
             {stageMessages[stage] || "Setting up your test"}
           </p>
         </div>
         
         {/* Progress bar */}
         <div className="w-full mb-8">
-          <div className="h-1 w-full bg-gray-100 rounded-full overflow-hidden">
+          <div className="h-1 w-full bg-muted rounded-full overflow-hidden">
             <div 
               className="h-full bg-gradient-to-r from-blue-500 to-indigo-600 transition-all duration-300 ease-out"
               style={{ width: `${progress}%` }}
@@ -80,13 +80,13 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ stage, message }) => {
                   className={`w-3 h-3 rounded-full mb-2 transition-all duration-300 ${
                     stepStage <= stage 
                       ? 'bg-blue-500 scale-110' 
-                      : 'bg-gray-200'
+                      : 'bg-muted'
                   }`}
                 ></div>
                 <span className={`text-xs ${
                   stepStage <= stage 
                     ? 'text-blue-500 font-medium' 
-                    : 'text-gray-400'
+                    : 'text-muted-foreground'
                 }`}>
                   Step {stepStage + 1}
                 </span>
@@ -96,7 +96,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ stage, message }) => {
         </div>
         
         {/* Helpful text */}
-        <p className="text-center text-sm text-gray-400">
+        <p className="text-center text-sm text-muted-foreground">
           {stage === 0 && "We're verifying your account credentials"}
           {stage === 1 && "Loading your personalized test questions"}
           {stage === 2 && "Preparing the microphone and scoring system"}

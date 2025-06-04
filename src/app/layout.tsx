@@ -4,6 +4,7 @@ import "./globals.css";
 // import { AuthProvider } from "@/context/AuthContext"; // Removed
 import Navbar from "@/components/Navbar";
 import { ClerkProvider } from "@clerk/nextjs";
+import { ThemeProvider } from "@/components/theme-provider";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -23,13 +24,15 @@ export default function RootLayout({
 }>) {
   return (
     <ClerkProvider>
-      <html lang="en">
+      <html lang="en" suppressHydrationWarning>
         <body
           className={`${inter.variable} antialiased font-sans`}
           style={{ fontFamily: 'var(--font-inter), system-ui, sans-serif' }}
         >
-          <Navbar />
-          <main>{children}</main>
+          <ThemeProvider>
+            <Navbar />
+            <main>{children}</main>
+          </ThemeProvider>
         </body>
       </html>
     </ClerkProvider>

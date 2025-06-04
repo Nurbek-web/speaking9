@@ -13,13 +13,13 @@ const ErrorScreen: React.FC<ErrorScreenProps> = ({ error, onRetry, onBack }) => 
   }, []);
   
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-b from-white to-gray-50">
+    <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-b from-background to-muted/50">
       <div className="w-full max-w-md px-6">
         {/* Error icon with animation */}
         <div className="flex justify-center mb-10">
-          <div className={`relative h-24 w-24 rounded-full bg-red-50 flex items-center justify-center transition-all duration-700 ${showAnimation ? 'scale-100' : 'scale-90 opacity-80'}`}>
+          <div className={`relative h-24 w-24 rounded-full bg-red-50 dark:bg-red-950 flex items-center justify-center transition-all duration-700 ${showAnimation ? 'scale-100' : 'scale-90 opacity-80'}`}>
             <svg 
-              className={`h-12 w-12 text-red-500 transition-all duration-700 delay-300 ${showAnimation ? 'opacity-100 scale-100' : 'opacity-0 scale-90'}`} 
+              className={`h-12 w-12 text-red-500 dark:text-red-400 transition-all duration-700 delay-300 ${showAnimation ? 'opacity-100 scale-100' : 'opacity-0 scale-90'}`} 
               xmlns="http://www.w3.org/2000/svg" 
               viewBox="0 0 24 24" 
               fill="none" 
@@ -32,17 +32,17 @@ const ErrorScreen: React.FC<ErrorScreenProps> = ({ error, onRetry, onBack }) => 
               <line x1="12" y1="8" x2="12" y2="12"></line>
               <line x1="12" y1="16" x2="12.01" y2="16"></line>
             </svg>
-            <div className={`absolute inset-0 border-2 border-red-200 rounded-full transition-all duration-1000 ${showAnimation ? 'opacity-0 scale-150' : 'opacity-100 scale-100'}`}></div>
+            <div className={`absolute inset-0 border-2 border-red-200 dark:border-red-800 rounded-full transition-all duration-1000 ${showAnimation ? 'opacity-0 scale-150' : 'opacity-100 scale-100'}`}></div>
           </div>
         </div>
         
         {/* Error content */}
         <div className={`text-center mb-10 transition-all duration-500 delay-200 ${showAnimation ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
-          <h1 className="text-2xl font-medium text-gray-900 mb-3">We encountered a problem</h1>
-          <div className="bg-red-50 border border-red-100 rounded-xl px-5 py-4 mb-4">
-            <p className="text-red-700 font-medium">{error}</p>
+          <h1 className="text-2xl font-medium text-foreground mb-3">We encountered a problem</h1>
+          <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-xl px-5 py-4 mb-4">
+            <p className="text-red-700 dark:text-red-300 font-medium">{error}</p>
           </div>
-          <p className="text-gray-500 text-base">
+          <p className="text-muted-foreground text-base">
             This might be due to a network issue, a problem with your account, 
             or the test may not be available at this time.
           </p>
@@ -62,7 +62,7 @@ const ErrorScreen: React.FC<ErrorScreenProps> = ({ error, onRetry, onBack }) => 
           {onBack && (
             <button 
               onClick={onBack}
-              className="w-full py-3.5 bg-white hover:bg-gray-50 text-gray-800 font-medium rounded-xl border border-gray-200 transition-all duration-200 shadow-sm hover:shadow focus:outline-none focus:ring-2 focus:ring-gray-200 focus:ring-offset-2"
+              className="w-full py-3.5 bg-card hover:bg-muted text-card-foreground font-medium rounded-xl border border-border transition-all duration-200 shadow-sm hover:shadow focus:outline-none focus:ring-2 focus:ring-border focus:ring-offset-2"
             >
               Return to Tests
             </button>

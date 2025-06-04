@@ -4,6 +4,7 @@ import { cookies } from 'next/headers'
 import { auth } from '@clerk/nextjs/server'
 import { clerkToSupabaseId } from '@/lib/clerkSupabaseAdapter'
 import fetch from 'node-fetch'
+import OpenAI from 'openai'
 
 // Configure Azure OpenAI client
 const endpoint = process.env.AZURE_OPENAI_ENDPOINT || 'https://arnur-maw58kmn-swedencentral.cognitiveservices.azure.com'
@@ -25,61 +26,77 @@ console.log('[API:score] Azure OpenAI configuration:', {
 console.log(`[API:score] Supabase URL: ${supabaseUrl ? supabaseUrl.substring(0,15) + '...': 'Missing'}`);
 console.log(`[API:score] Supabase Service Key: ${supabaseServiceKey ? 'Set' : 'Missing'}`);
 
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY!,
+})
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+)
+
 export async function POST(request: NextRequest) {
   console.log('[API:score] Received POST request');
   try {
-    // Authentication - try both Clerk and direct Supabase
-    let userId = null
-    let supabase = null;
+    // Get user from Clerk auth
+    const { userId: authUserId } = await auth()
     
-    // First try Clerk auth
-    try {
-      const session = await auth()
-      if (session?.userId) {
-        userId = clerkToSupabaseId(session.userId)
-        console.log(`[API:score] Authenticated via Clerk: ${userId.substring(0, 8)}...`)
-      }
-    } catch (clerkError) {
-      console.error('[API:score] Clerk auth error:', clerkError)
+    const body = await request.json()
+    const { 
+      transcript, 
+      questionId, 
+      userResponseId,
+      userId: clientUserId // This may be passed from client as fallback
+    } = body
+
+    console.log(`[API:score] Processing request - authUserId: ${authUserId?.substring(0, 8) || 'none'}..., clientUserId: ${clientUserId?.substring(0, 8) || 'none'}...`)
+
+    if (!transcript || !questionId || !userResponseId) {
+      return NextResponse.json(
+        { error: 'Missing required fields: transcript, questionId, userResponseId' },
+        { status: 400 }
+      )
     }
+
+    // Use auth user ID first, fallback to client-provided user ID
+    let clerkUserId = authUserId
+    if (!clerkUserId && clientUserId) {
+      clerkUserId = clientUserId;
+      console.log(`[API:score] Using client-provided user ID: ${clerkUserId!.substring(0, 8)}...`);
+    }
+
+    if (!clerkUserId) {
+      return NextResponse.json(
+        { error: 'User not authenticated' },
+        { status: 401 }
+      )
+    }
+
+    // Convert Clerk ID to Supabase UUID for database operations
+    const supabaseUserId = clerkToSupabaseId(clerkUserId)
+    console.log(`[API:score] Using Clerk ID: ${clerkUserId.substring(0, 8)}... -> Supabase UUID: ${supabaseUserId.substring(0, 8)}...`)
+
+    // TypeScript knows userId is not null after this point
+    const finalUserId: string = supabaseUserId
+    console.log(`[API:score] Using user ID: ${finalUserId.substring(0, 8)}...`)
     
     // Parse the request body
     const { 
-      userId: clientUserId,
-      questionId, 
       questionText,
       questionType,
-      transcript, 
       audioUrl,
       responseStatus, 
       hasAudioData 
-    } = await request.json()
+    } = body
     
     console.log('[API:score] Request body parsed:', {
-      clientUserId: clientUserId ? `${clientUserId.substring(0,8)}...` : 'N/A',
       questionId,
       questionText: questionText ? `${questionText.substring(0,30)}...` : 'N/A',
       questionType,
-      transcript: transcript ? `${transcript.substring(0,50)}...` : 'N/A',
       audioUrl: audioUrl ? `${audioUrl.substring(0,50)}...` : 'N/A',
       responseStatus,
       hasAudioData
     });
-    
-    // If no user ID from auth, use the one provided by client
-    if (!userId && clientUserId) {
-      userId = clientUserId
-      console.log(`[API:score] Using client-provided user ID: ${userId.substring(0, 8)}...`)
-    }
-    
-    // Create Supabase client using direct access key (no cookies needed)
-    // This should avoid the cookies warning entirely
-    if (supabaseUrl && supabaseServiceKey) {
-      supabase = createClient(supabaseUrl, supabaseServiceKey, {
-        auth: { persistSession: false }
-      });
-      console.log('[API:score] Created Supabase client with service role key');
-    }
     
     // Validate required fields
     if (!transcript) {
@@ -273,15 +290,15 @@ Format your response as a JSON object with the following keys:
         console.log('[API:score] Successfully parsed feedback JSON. Keys:', Object.keys(feedback));
         
         // Store the scoring in the database if we have a user ID and question ID
-        if (userId && questionId && supabase) {
+        if (finalUserId && questionId && supabase) {
           try {
-            console.log(`[API:score] Saving feedback to database for user: ${userId.substring(0, 8)}...`)
+            console.log(`[API:score] Saving feedback to database for user: ${finalUserId.substring(0, 8)}...`)
             
             // First check if we have an existing response
             const { data: existingResponse, error: fetchError } = await supabase
               .from('user_responses')
               .select('id')
-              .eq('user_id', userId)
+              .eq('user_id', finalUserId)
               .eq('test_question_id', questionId)
               .maybeSingle()
             
@@ -313,7 +330,7 @@ Format your response as a JSON object with the following keys:
               const { error: insertError } = await supabase
                 .from('user_responses')
                 .insert({
-                  user_id: userId,
+                  user_id: finalUserId,
                   test_question_id: questionId,
                   transcript,
                   feedback,
@@ -332,7 +349,7 @@ Format your response as a JSON object with the following keys:
             // Continue - we'll still return the feedback even if DB save fails
           }
         } else {
-          console.log('[API:score] Skipping database save: Missing userId, questionId, or Supabase client.', { hasUserId: !!userId, hasQuestionId: !!questionId, hasSupabase: !!supabase });
+          console.log('[API:score] Skipping database save: Missing userId, questionId, or Supabase client.', { hasUserId: !!finalUserId, hasQuestionId: !!questionId, hasSupabase: !!supabase });
         }
         
         // Return the feedback to the client

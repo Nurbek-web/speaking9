@@ -209,19 +209,27 @@ export default function SpeakingTestContainer() {
     }
   }, [currentQuestion, stopRecording, recordingState.duration])
 
-  const handleSkipQuestion = useCallback(() => {
-    if (!currentQuestion) return
+  const handlePlayRecording = useCallback(() => {
+    if (!currentQuestion || !userResponses[currentQuestion.id]?.audio_url) return
+    
+    const audio = new Audio(userResponses[currentQuestion.id].audio_url)
+    audio.play().catch(error => {
+      console.error('Error playing recording:', error)
+    })
+  }, [currentQuestion, userResponses])
 
+  const handleReRecord = useCallback(() => {
+    if (!currentQuestion) return
+    
+    // Clear the current response to allow re-recording
     setUserResponses(prev => ({
       ...prev,
       [currentQuestion.id]: {
         ...prev[currentQuestion.id],
         test_question_id: currentQuestion.id,
-        status: 'skipped'
+        status: 'idle'
       }
     }))
-
-    navigateToNext()
   }, [currentQuestion])
 
   const navigateToNext = useCallback(() => {
@@ -258,6 +266,21 @@ export default function SpeakingTestContainer() {
       console.error('Test submission error:', error)
     }
   }, [testId, supabaseUserId, userResponses, submitTest, cleanupRecording])
+
+  const handleSkipQuestion = useCallback(() => {
+    if (!currentQuestion) return
+
+    setUserResponses(prev => ({
+      ...prev,
+      [currentQuestion.id]: {
+        ...prev[currentQuestion.id],
+        test_question_id: currentQuestion.id,
+        status: 'skipped'
+      }
+    }))
+
+    navigateToNext()
+  }, [currentQuestion, navigateToNext])
 
   // Error handling
   const error = authError || dataError || audioError || submissionState.error
@@ -316,7 +339,7 @@ export default function SpeakingTestContainer() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gradient-to-b from-background to-muted/10">
       <TestProgressHeader 
         testInfo={testInfo}
         progress={progress}
@@ -324,11 +347,11 @@ export default function SpeakingTestContainer() {
         overallTimer={overallTimer}
       />
 
-      <main className="max-w-7xl mx-auto px-6 py-8">
-        {/* Main Content Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Question Section - Takes up 2 columns on large screens */}
-          <div className="lg:col-span-2 space-y-6">
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+        {/* Compact Main Content Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 lg:gap-6">
+          {/* Question Section - Takes up 3 columns on large screens */}
+          <div className="lg:col-span-3 space-y-4">
             <TestQuestionDisplay 
               question={currentQuestion}
               navigation={navigation}
@@ -338,19 +361,23 @@ export default function SpeakingTestContainer() {
             <TestControls 
               navigation={navigation}
               recordingState={recordingState}
-              onSkipQuestion={handleSkipQuestion}
+              userResponse={currentQuestion ? userResponses[currentQuestion.id] : undefined}
               onNextQuestion={navigateToNext}
               onFinishTest={() => setIsSubmitDialogOpen(true)}
+              onPlayRecording={handlePlayRecording}
+              onReRecord={handleReRecord}
+              onSkipQuestion={handleSkipQuestion}
               disabled={submissionState.isSubmitting}
             />
           </div>
 
-          {/* Recording Section - Takes up 1 column, sticky on large screens */}
-          <div className="lg:col-span-1">
-            <div className="lg:sticky lg:top-32">
+          {/* Recording Section - Takes up 2 columns, sticky */}
+          <div className="lg:col-span-2">
+            <div className="lg:sticky lg:top-20">
               <TestAudioRecording 
                 question={currentQuestion}
                 recordingState={recordingState}
+                userResponse={currentQuestion ? userResponses[currentQuestion.id] : undefined}
                 onStartRecording={startRecording}
                 onStopRecording={handleRecordingComplete}
                 disabled={submissionState.isSubmitting}

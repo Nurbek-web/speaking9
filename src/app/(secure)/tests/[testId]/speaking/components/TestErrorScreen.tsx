@@ -8,17 +8,17 @@ interface TestErrorScreenProps {
 
 export default function TestErrorScreen({ error, onRetry, onBack }: TestErrorScreenProps) {
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+    <div className="min-h-screen bg-background flex items-center justify-center">
       <div className="max-w-md text-center space-y-6 p-6">
-        <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto">
-          <AlertCircle className="w-8 h-8 text-red-600" />
+        <div className="w-16 h-16 bg-red-100 dark:bg-red-950 rounded-full flex items-center justify-center mx-auto">
+          <AlertCircle className="w-8 h-8 text-red-600 dark:text-red-400" />
         </div>
         
         <div>
-          <h2 className="text-xl font-semibold text-gray-900 mb-2">
+          <h2 className="text-xl font-semibold text-foreground mb-2">
             Something went wrong
           </h2>
-          <p className="text-gray-600 leading-relaxed">
+          <p className="text-muted-foreground leading-relaxed">
             {error}
           </p>
         </div>
@@ -27,7 +27,7 @@ export default function TestErrorScreen({ error, onRetry, onBack }: TestErrorScr
           {onBack && (
             <button
               onClick={onBack}
-              className="flex items-center justify-center space-x-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg transition-colors"
+              className="flex items-center justify-center space-x-2 px-4 py-2 bg-muted hover:bg-muted/80 text-muted-foreground font-medium rounded-lg transition-colors"
             >
               <ArrowLeft className="w-4 h-4" />
               <span>Go Back</span>

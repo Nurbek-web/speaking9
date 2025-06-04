@@ -82,17 +82,17 @@ export default function Home() {
           <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-full max-w-3xl h-64 bg-indigo-500/10 rounded-full filter blur-3xl"></div>
           
           <div className="text-center max-w-3xl mx-auto mb-12 relative">
-            <div className="inline-flex items-center bg-indigo-50 rounded-full px-4 py-1 mb-6 text-indigo-700 font-medium text-sm">
+            <div className="inline-flex items-center bg-indigo-50 dark:bg-indigo-950 rounded-full px-4 py-1 mb-6 text-indigo-700 dark:text-indigo-300 font-medium text-sm">
               <Users className="h-4 w-4 mr-2" />
               <span>Join 25,000+ IELTS test-takers today</span>
             </div>
             
-            <h1 className="text-5xl sm:text-6xl font-extrabold tracking-tight text-gray-900 mb-6">
-              Ace Your IELTS Speaking Test <span className="text-indigo-600">Without Expensive Tutors</span>
+            <h1 className="text-5xl sm:text-6xl font-extrabold tracking-tight text-foreground mb-6">
+              Ace Your IELTS Speaking Test <span className="text-indigo-600 dark:text-indigo-400">Without Expensive Tutors</span>
             </h1>
             
-            <p className="text-xl text-gray-600 mb-8 max-w-2xl mx-auto">
-              Get AI-powered feedback that boosts your band score by <span className="font-semibold text-indigo-600">1.5 points</span> on average. Practice anytime, anywhere with instant results.
+            <p className="text-xl text-muted-foreground mb-8 max-w-2xl mx-auto">
+              Get AI-powered feedback that boosts your band score by <span className="font-semibold text-indigo-600 dark:text-indigo-400">1.5 points</span> on average. Practice anytime, anywhere with instant results.
             </p>
             
             <div className="flex flex-col sm:flex-row gap-4 justify-center mb-10">
@@ -105,7 +105,7 @@ export default function Home() {
             </div>
             
             {/* Social proof bar */}
-            <div className="flex flex-wrap justify-center gap-6 text-sm text-gray-500">
+            <div className="flex flex-wrap justify-center gap-6 text-sm text-muted-foreground">
               <div className="flex items-center">
                 <Star className="h-4 w-4 text-yellow-400 mr-1" />
                 <span>4.9/5 from 2,400+ reviews</span>
@@ -218,35 +218,35 @@ export default function Home() {
           </div>
           
           {/* Brand logos */}
-          <div className="mt-16 border-t border-gray-200 pt-8">
-            <p className="text-center text-sm text-gray-500 mb-6">TRUSTED BY STUDENTS PREPARING FOR</p>
+          <div className="mt-16 border-t border-border pt-8">
+            <p className="text-center text-sm text-muted-foreground mb-6">TRUSTED BY STUDENTS PREPARING FOR</p>
             <div className="flex flex-wrap justify-center gap-x-12 gap-y-6 opacity-60">
-              <div className="text-gray-900 font-bold text-xl">University of London</div>
-              <div className="text-gray-900 font-bold text-xl">MIT</div>
-              <div className="text-gray-900 font-bold text-xl">Harvard</div>
-              <div className="text-gray-900 font-bold text-xl">Oxford</div>
-              <div className="text-gray-900 font-bold text-xl">Stanford</div>
+              <div className="text-foreground font-bold text-xl">University of London</div>
+              <div className="text-foreground font-bold text-xl">MIT</div>
+              <div className="text-foreground font-bold text-xl">Harvard</div>
+              <div className="text-foreground font-bold text-xl">Oxford</div>
+              <div className="text-foreground font-bold text-xl">Stanford</div>
             </div>
           </div>
         </div>
       </section>
       
       {/* Benefits Section */}
-      <section className="py-20 bg-gray-50">
+      <section className="py-20 bg-muted/50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center max-w-3xl mx-auto mb-16">
-            <h2 className="text-3xl font-bold text-gray-900 mb-4">Why 28,000+ Students Choose Speaking9</h2>
-            <p className="text-xl text-gray-600">Save time and money while getting the exact same results</p>
+            <h2 className="text-3xl font-bold text-foreground mb-4">Why 28,000+ Students Choose Speaking9</h2>
+            <p className="text-xl text-muted-foreground">Save time and money while getting the exact same results</p>
           </div>
           
           <div className="grid md:grid-cols-3 gap-8 mb-16">
             {benefits.map((benefit, i) => (
-              <div key={i} className="bg-white rounded-xl p-6 shadow-lg border border-gray-100 transition-all hover:shadow-xl hover:-translate-y-1">
-                <div className="w-12 h-12 rounded-full bg-indigo-100 flex items-center justify-center mb-4">
+              <div key={i} className="bg-card rounded-xl p-6 shadow-lg border border-border transition-all hover:shadow-xl hover:-translate-y-1">
+                <div className="w-12 h-12 rounded-full bg-indigo-100 dark:bg-indigo-900 flex items-center justify-center mb-4">
                   {benefit.icon}
                 </div>
-                <h3 className="text-xl font-bold text-gray-900 mb-2">{benefit.title}</h3>
-                <p className="text-gray-600">{benefit.description}</p>
+                <h3 className="text-xl font-bold text-card-foreground mb-2">{benefit.title}</h3>
+                <p className="text-muted-foreground">{benefit.description}</p>
               </div>
             ))}
           </div>
@@ -271,8 +271,8 @@ export default function Home() {
       <section className="py-20 px-4 sm:px-6 lg:px-8">
         <div className="max-w-7xl mx-auto">
           <div className="text-center mb-16">
-            <h2 className="text-3xl sm:text-4xl font-bold text-gray-900">How Speaking9 Works</h2>
-            <p className="mt-4 text-xl text-gray-600">Three simple steps to improve your IELTS speaking score</p>
+            <h2 className="text-3xl sm:text-4xl font-bold text-foreground">How Speaking9 Works</h2>
+            <p className="mt-4 text-xl text-muted-foreground">Three simple steps to improve your IELTS speaking score</p>
           </div>
           
           <div className="grid md:grid-cols-3 gap-8">
@@ -294,12 +294,12 @@ export default function Home() {
               }
             ].map((step, i) => (
               <div key={i} className="relative">
-                <div className="bg-white rounded-xl p-8 shadow-lg border border-gray-100 h-full transition-all hover:shadow-xl hover:-translate-y-1">
-                  <div className="w-14 h-14 rounded-full bg-indigo-100 flex items-center justify-center mb-6">
+                <div className="bg-card rounded-xl p-8 shadow-lg border border-border h-full transition-all hover:shadow-xl hover:-translate-y-1">
+                  <div className="w-14 h-14 rounded-full bg-indigo-100 dark:bg-indigo-900 flex items-center justify-center mb-6">
                     {step.icon}
                   </div>
-                  <h3 className="text-xl font-bold text-gray-900 mb-3">{step.title}</h3>
-                  <p className="text-gray-600">{step.description}</p>
+                  <h3 className="text-xl font-bold text-card-foreground mb-3">{step.title}</h3>
+                  <p className="text-muted-foreground">{step.description}</p>
                 </div>
                 {i < 2 && (
                   <div className="hidden md:block absolute top-1/2 right-0 transform translate-x-1/2 -translate-y-1/2 z-10">
@@ -313,19 +313,19 @@ export default function Home() {
       </section>
 
       {/* Score Trends Section */}
-      <section className="py-20 px-4 sm:px-6 lg:px-8 bg-gradient-to-br from-indigo-50 to-purple-50">
+      <section className="py-20 px-4 sm:px-6 lg:px-8 bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-indigo-950 dark:to-purple-950">
         <div className="max-w-7xl mx-auto">
           <div className="text-center mb-16">
-            <div className="inline-flex items-center bg-indigo-100 rounded-full px-4 py-1 mb-6 text-indigo-700 font-medium text-sm">
+            <div className="inline-flex items-center bg-indigo-100 dark:bg-indigo-900 rounded-full px-4 py-1 mb-6 text-indigo-700 dark:text-indigo-300 font-medium text-sm">
               <span>Data from 150,000+ practice tests</span>
             </div>
-            <h2 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-4">Real Results. Real Improvements.</h2>
-            <p className="mt-4 text-xl text-gray-600 max-w-3xl mx-auto">
+            <h2 className="text-3xl sm:text-4xl font-bold text-foreground mb-4">Real Results. Real Improvements.</h2>
+            <p className="mt-4 text-xl text-muted-foreground max-w-3xl mx-auto">
               Our users improve by an average of 1.5 band scores within just 3 weeks of practice
             </p>
           </div>
           
-          <div className="bg-white rounded-xl p-8 shadow-xl">
+          <div className="bg-card rounded-xl p-8 shadow-xl border border-border">
             <div className="h-72 w-full relative">
               <div className="absolute inset-0 flex items-end">
                 <div className="w-full flex items-end justify-between gap-3 px-4">
@@ -338,21 +338,21 @@ export default function Home() {
                             Band {score}
                           </div>
                         </div>
-                        <span className="text-xs text-gray-500">{i + 1} Week</span>
+                        <span className="text-xs text-muted-foreground">{i + 1} Week</span>
                       </div>
                     );
                   })}
                 </div>
               </div>
-              <div className="absolute left-0 top-0 bottom-0 w-10 border-r border-gray-200 flex flex-col justify-between items-end pr-2">
+              <div className="absolute left-0 top-0 bottom-0 w-10 border-r border-border flex flex-col justify-between items-end pr-2">
                 {[9, 8, 7, 6, 5].map((band) => (
-                  <span key={band} className="text-xs text-gray-500">{band}.0</span>
+                  <span key={band} className="text-xs text-muted-foreground">{band}.0</span>
                 ))}
               </div>
             </div>
             
             <div className="mt-8 text-center">
-              <p className="text-gray-700 font-medium">
+              <p className="text-card-foreground font-medium">
                 Users who practice 3+ times per week see the fastest improvements
               </p>
             </div>
@@ -364,26 +364,26 @@ export default function Home() {
       <section className="py-24 px-4 sm:px-6 lg:px-8">
         <div className="max-w-7xl mx-auto">
           <div className="text-center mb-16">
-            <div className="inline-flex items-center bg-indigo-100 rounded-full px-4 py-1 mb-6 text-indigo-700 font-medium text-sm">
+            <div className="inline-flex items-center bg-indigo-100 dark:bg-indigo-900 rounded-full px-4 py-1 mb-6 text-indigo-700 dark:text-indigo-300 font-medium text-sm">
               <Star className="h-4 w-4 mr-1 fill-current" />
               <span>4.9/5 average rating</span>
             </div>
-            <h2 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-4">Success Stories From Real Students</h2>
-            <p className="mt-4 text-xl text-gray-600 max-w-3xl mx-auto">
+            <h2 className="text-3xl sm:text-4xl font-bold text-foreground mb-4">Success Stories From Real Students</h2>
+            <p className="mt-4 text-xl text-muted-foreground max-w-3xl mx-auto">
               Don't just take our word for it. Here's what our users have to say about Speaking9.
             </p>
           </div>
           
           <div className="grid md:grid-cols-3 gap-8">
             {testimonials.map((testimonial, i) => (
-              <Card key={i} className="p-8 h-full overflow-hidden border-gray-100 shadow-lg hover:shadow-xl transition-all">
+              <Card key={i} className="p-8 h-full overflow-hidden border-border shadow-lg hover:shadow-xl transition-all">
                 <div className="flex items-center mb-6">
-                  <div className="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center text-xl font-bold text-indigo-700">
+                  <div className="w-12 h-12 bg-indigo-100 dark:bg-indigo-900 rounded-full flex items-center justify-center text-xl font-bold text-indigo-700 dark:text-indigo-300">
                     {testimonial.name.charAt(0)}
                   </div>
                   <div className="ml-4">
                     <h3 className="font-bold text-lg">{testimonial.name}</h3>
-                    <p className="text-gray-600 text-sm">{testimonial.role}</p>
+                    <p className="text-muted-foreground text-sm">{testimonial.role}</p>
                   </div>
                 </div>
                 
@@ -393,11 +393,11 @@ export default function Home() {
                   ))}
                 </div>
                 
-                <p className="text-gray-700 mb-4">"{testimonial.content}"</p>
+                <p className="text-card-foreground mb-4">"{testimonial.content}"</p>
                 
-                <div className="mt-auto pt-4 border-t border-gray-100">
-                  <div className="inline-flex items-center bg-green-100 rounded-full px-3 py-1">
-                    <span className="text-green-700 font-bold text-sm">Band {testimonial.score}</span>
+                <div className="mt-auto pt-4 border-t border-border">
+                  <div className="inline-flex items-center bg-green-100 dark:bg-green-900 rounded-full px-3 py-1">
+                    <span className="text-green-700 dark:text-green-300 font-bold text-sm">Band {testimonial.score}</span>
                   </div>
                 </div>
               </Card>
@@ -407,18 +407,18 @@ export default function Home() {
       </section>
 
       {/* FAQ Section */}
-      <section className="py-24 px-4 sm:px-6 lg:px-8 bg-gray-50">
+      <section className="py-24 px-4 sm:px-6 lg:px-8 bg-muted/50">
         <div className="max-w-4xl mx-auto">
           <div className="text-center mb-16">
-            <h2 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-4">Frequently Asked Questions</h2>
-            <p className="mt-4 text-xl text-gray-600">Everything you need to know about Speaking9</p>
+            <h2 className="text-3xl sm:text-4xl font-bold text-foreground mb-4">Frequently Asked Questions</h2>
+            <p className="mt-4 text-xl text-muted-foreground">Everything you need to know about Speaking9</p>
           </div>
           
           <div className="space-y-6">
             {faqs.map((faq, i) => (
-              <div key={i} className="bg-white rounded-xl p-6 shadow-lg border border-gray-100 transition-all hover:shadow-xl hover:-translate-y-1">
-                <h3 className="font-bold text-lg text-gray-900 mb-3">{faq.question}</h3>
-                <p className="text-gray-600">{faq.answer}</p>
+              <div key={i} className="bg-card rounded-xl p-6 shadow-lg border border-border transition-all hover:shadow-xl hover:-translate-y-1">
+                <h3 className="font-bold text-lg text-card-foreground mb-3">{faq.question}</h3>
+                <p className="text-muted-foreground">{faq.answer}</p>
               </div>
             ))}
           </div>

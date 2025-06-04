@@ -25,70 +25,83 @@ export default function TestSubmissionDialog({
 }: TestSubmissionDialogProps) {
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle className="text-xl font-semibold text-gray-900">
+          <DialogTitle className="text-lg font-semibold text-foreground">
             Submit Test
           </DialogTitle>
         </DialogHeader>
         
-        <div className="space-y-6">
-          {/* Progress Summary */}
-          <div className="bg-gray-50 rounded-lg p-4">
+        <div className="space-y-4">
+          {/* Compact Progress Summary */}
+          <div className="bg-muted/30 rounded-lg p-3">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium text-gray-700">Completed Questions</span>
-              <span className="text-sm font-semibold text-gray-900">
+              <span className="text-xs font-medium text-muted-foreground">Progress</span>
+              <span className="text-sm font-semibold text-foreground">
                 {progress.completedQuestions}/{progress.totalQuestions}
               </span>
             </div>
-            <div className="w-full bg-gray-200 rounded-full h-2">
+            <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
               <div 
                 className="bg-blue-600 h-2 rounded-full transition-all duration-300"
                 style={{ width: `${progress.overallPercentage}%` }}
               />
             </div>
+            <div className="text-center mt-1">
+              <span className="text-xs text-muted-foreground">
+                {Math.round(progress.overallPercentage)}% Complete
+              </span>
+            </div>
           </div>
 
-          {/* Confirmation Text */}
-          <p className="text-gray-600">
-            Are you ready to submit your speaking test? You won't be able to make changes after submission.
-          </p>
+          {/* Compact Confirmation Text */}
+          <div className="text-center">
+            <p className="text-sm text-muted-foreground">
+              Ready to submit your speaking test?
+            </p>
+            <p className="text-xs text-muted-foreground mt-2 bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded p-2">
+              You won't be able to make changes after submission.
+            </p>
+          </div>
 
-          {/* Error Display */}
+          {/* Compact Error Display */}
           {submissionState.error && (
-            <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-              <div className="flex items-center space-x-3">
-                <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
-                <div>
-                  <h4 className="font-medium text-red-900">Submission Error</h4>
-                  <p className="text-sm text-red-700 mt-1">{submissionState.error}</p>
+            <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-lg p-3">
+              <div className="flex items-start space-x-2">
+                <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <h4 className="font-medium text-red-900 dark:text-red-100 text-sm">Error</h4>
+                  <p className="text-xs text-red-700 dark:text-red-300 mt-0.5">{submissionState.error}</p>
                 </div>
               </div>
             </div>
           )}
 
-          {/* Action Buttons */}
+          {/* Compact Action Buttons */}
           <div className="flex gap-3">
             <button
               onClick={onClose}
               disabled={submissionState.isSubmitting}
-              className="flex-1 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg transition-colors disabled:opacity-50"
+              className="flex-1 px-4 py-2 bg-muted hover:bg-muted/80 border border-border rounded-lg text-muted-foreground font-medium text-sm transition-colors disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               onClick={onConfirm}
               disabled={submissionState.isSubmitting}
-              className="flex-1 flex items-center justify-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors disabled:opacity-50"
+              className="flex-1 flex items-center justify-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm rounded-lg transition-colors disabled:opacity-50"
             >
               {submissionState.isSubmitting ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Submitting...</span>
+                </>
               ) : (
-                <CheckCircle className="w-4 h-4" />
+                <>
+                  <CheckCircle className="w-4 h-4" />
+                  <span>Submit</span>
+                </>
               )}
-              <span>
-                {submissionState.isSubmitting ? 'Submitting...' : 'Submit Test'}
-              </span>
             </button>
           </div>
         </div>
